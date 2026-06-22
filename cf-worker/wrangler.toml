@@ -1,12 +1,12 @@
 name = "tg-toolbox-emby-router"
 main = "src/index.ts"
 compatibility_date = "2024-09-25"
-workers_dev = true
+workers_dev = false
 
 # KV 命名空间：先用 wrangler kv:namespace create EMBY_KV 创建，把 id 填回来
 [[kv_namespaces]]
 binding = "EMBY_KV"
-id = "REPLACE_ME_WITH_REAL_KV_NAMESPACE_ID"
+id = "76e2d1f5f2404afd90182676d33f4f94"
 
 # 健康检测：每 1 分钟跑一次（Workers Free 最小间隔）
 [triggers]
