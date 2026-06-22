@@ -2,9 +2,20 @@ import { RESERVED_NAMES } from "./constants";
 import { readEmbys, readHealth, readNodes } from "./storage";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
 
+const IMAGE_CACHE_MAX_AGE = 7 * 24 * 60 * 60;
+const IMAGE_CACHE_SWR = 24 * 60 * 60;
+const STRIP_AUTH_PARAMS = ["api_key", "X-Emby-Token", "X-MediaBrowser-Token"];
+const FORWARD_REQ_HEADERS = new Set([
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "user-agent",
+]);
+
 export async function handleClientRequest(
   request: Request,
   env: Env,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -37,6 +48,11 @@ export async function handleClientRequest(
   }
 
   const target = buildTargetUrl(node.public_url, path, url.search);
+
+  if (isCacheableImageRequest(request, path)) {
+    return serveCachedImage(request, target, ctx);
+  }
+
   return new Response(null, {
     status: 307,
     headers: {
@@ -44,6 +60,72 @@ export async function handleClientRequest(
       "Cache-Control": "no-store",
     },
   });
+}
+
+function isCacheableImageRequest(request: Request, path: string): boolean {
+  if (request.method !== "GET") return false;
+  if (request.headers.has("Range")) return false;
+  return /\/Images\//i.test(path);
+}
+
+async function serveCachedImage(
+  request: Request,
+  target: string,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const cache = caches.default;
+  const cacheKey = buildImageCacheKey(target);
+
+  const hit = await cache.match(cacheKey);
+  if (hit) {
+    const resp = new Response(hit.body, hit);
+    resp.headers.set("X-Cache", "HIT");
+    return resp;
+  }
+
+  const upstream = await fetch(target, {
+    method: "GET",
+    headers: filterUpstreamHeaders(request.headers),
+    redirect: "follow",
+  });
+
+  if (!upstream.ok) {
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: upstream.headers,
+    });
+  }
+
+  const resp = new Response(upstream.body, upstream);
+  resp.headers.set(
+    "Cache-Control",
+    `public, max-age=${IMAGE_CACHE_MAX_AGE}, stale-while-revalidate=${IMAGE_CACHE_SWR}`,
+  );
+  resp.headers.delete("Set-Cookie");
+  resp.headers.delete("Pragma");
+  resp.headers.set("X-Cache", "MISS");
+
+  ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+  return resp;
+}
+
+function buildImageCacheKey(target: string): Request {
+  const u = new URL(target);
+  for (const p of STRIP_AUTH_PARAMS) {
+    u.searchParams.delete(p);
+  }
+  return new Request(u.toString(), { method: "GET" });
+}
+
+function filterUpstreamHeaders(src: Headers): Headers {
+  const out = new Headers();
+  for (const [k, v] of src) {
+    if (FORWARD_REQ_HEADERS.has(k.toLowerCase())) {
+      out.set(k, v);
+    }
+  }
+  return out;
 }
 
 async function chooseNode(

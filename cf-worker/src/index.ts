@@ -4,7 +4,7 @@ import { handleClientRequest } from "./router";
 import type { Env } from "./types";
 
 export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/__health") {
@@ -13,11 +13,15 @@ export default {
       });
     }
 
+    if (url.pathname === "/") {
+      return Response.redirect(new URL("/admin", url).toString(), 302);
+    }
+
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
       return routeAdmin(request, env);
     }
 
-    return handleClientRequest(request, env);
+    return handleClientRequest(request, env, ctx);
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
