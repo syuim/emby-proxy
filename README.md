@@ -10,15 +10,16 @@ Emby 反代统一入口，前后端分离架构：
 ```
 客户端 → entry.example.com/embyA/path        [CF Worker]
                               │ 1. 解析 emby_name
-                              │ 2. KV embys → primary=n_us, backups=[n_eu]
-                              │ 3. KV health → primary healthy?
+                              │ 2. KV embys → node_id=n_us
+                              │ 3. KV health → n_us healthy?
+                              │    不健康则从其他节点中随机挑一个健康的
                               ↓
                          307 Location: https://us.example.com/embyA/path
                               ↓
 客户端重发 → us-node (proxy-go) → 真 Emby
 ```
 
-emby 配置由 cf-worker UI 写入 KV → 同步 fan-out 推送到所有节点。节点对等，故障转移在 Worker 路由层完成。
+emby 配置由 cf-worker UI 写入 KV → 同步 fan-out 推送到所有节点。节点对等，故障转移在 Worker 路由层完成（指定节点不健康 → 从剩余节点中**随机挑一个健康节点**；全部不健康 → 兜底原节点）。
 
 ## 快速部署
 
@@ -58,9 +59,9 @@ npx wrangler deploy
 
 打开 `https://<worker-domain>/admin`，输入 ADMIN_TOKEN：
 
-1. **Nodes 页**：添加节点（name + public_url）
-2. **Embys 页**：为每个 emby 实例填 emby_name + backend_url + 主节点 + 备用节点
-3. **Health 页**：等 1 分钟看 cron 探活，可手动重推
+1. **Nodes 页**：添加节点（name + public_url），同表展示健康/延迟/applied version/同步错误，可手动重推
+2. **Embys 页**：为每个 emby 实例填 emby_name + backend_url + 节点（单选）
+3. 等 1 分钟看 cron 探活；不健康节点会被路由层随机切到其他健康节点
 
 详见 `cf-worker/README.md`。
 
@@ -70,8 +71,9 @@ npx wrangler deploy
 |---|---|---|
 | 跳转码 | 307 | 保留 method+body，Emby POST API 不丢 |
 | 节点同步 | 全量推所有节点 | 节点对等，故障转移即时生效 |
+| 故障转移 | 指定 node 不健康 → 其他节点中随机选健康的 | 不再维护主/备节点列表，配置最简 |
 | 健康检测 | cron 每 1min + 连续 2 次失败降级 / 1 次成功恢复 | 慢降级、快恢复 |
-| 全部不健康 | fallback primary（不返 503） | 让客户端自己感知失败 |
+| 全部不健康 | fallback 到 emby 原始 node_id（不返 503） | 让客户端自己感知失败 |
 | 推送协议 | `{version, proxies:[{path_prefix, backend_url}]}` | 沿用旧 schema，向后兼容 |
 
 ## 开发
@@ -92,8 +94,9 @@ cd cf-worker && npm install && npx tsc --noEmit && npx wrangler dev
 
 1. `cd cf-worker && npx wrangler login` 浏览器登录
 2. `npx wrangler kv namespace create EMBY_KV` 创建 KV，把 id 填回 `wrangler.toml`
-3. `npx wrangler secret put ADMIN_TOKEN` / `npx wrangler secret put EMBY_SYNC_TOKEN` 写入 secrets
-4. `npx wrangler deploy` 首次部署 + 在 CF 控制台为 worker 绑定自定义域名
+3. 多账号用户需把 `account_id` 写进 `wrangler.toml`（已写入 Suyu 账号），否则 `wrangler` 在 CI 非交互模式下会报 `More than one account available`
+4. `npx wrangler secret put ADMIN_TOKEN` / `npx wrangler secret put EMBY_SYNC_TOKEN` 写入 secrets
+5. `npx wrangler deploy` 首次部署 + 在 CF 控制台为 worker 绑定自定义域名
 
 **启用 CI 自动部署**：
 
@@ -105,6 +108,35 @@ GitHub 仓库 Settings → Secrets and variables → Actions 加两个 secret：
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID（dash 右侧栏） |
 
 > ⚠️ KV namespace ID 和 wrangler secrets 不会通过 CI 部署，必须先在本地手动完成。CI 只负责更新代码。
+
+### ⚠️ 关于 Variables vs Secrets 的坑
+
+CF Worker 后台的"环境变量"分两种，行为完全不同：
+
+| 类型 | 加密 | `wrangler deploy` 行为 |
+|---|---|---|
+| **Secret** | ✅ 加密 | 部署不覆盖。只有 `wrangler secret put` 或面板手删能改 |
+| **Variable**（明文） | ❌ 明文 | **每次部署会用 `wrangler.toml` 中的 `[vars]` 段覆盖** —— toml 里没声明 = 部署后清空 |
+
+**结论**：所有 token / 密钥都用 Secret 管理。如果之前在面板上加的是"Plaintext Variable"，每次 CI deploy 都会把它清掉。修复办法：
+
+```bash
+cd cf-worker
+npx wrangler secret put ADMIN_TOKEN       # 改用 secret
+npx wrangler secret put EMBY_SYNC_TOKEN
+# 然后去 CF 面板删掉同名的 Plaintext Variables（避免重复定义）
+```
+
+### 本地 dev 环境变量
+
+`wrangler dev` 不会读生产 secrets，本地用 `cf-worker/.dev.vars`（已 gitignore）：
+
+```
+ADMIN_TOKEN=local-dev-token
+EMBY_SYNC_TOKEN=local-dev-sync-token
+```
+
+本地与生产 token 值**完全独立**，不需要相同（除非你的本地 dev 直连真实节点）。
 
 ## Token 共享与鉴权
 
