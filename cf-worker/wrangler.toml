@@ -1,0 +1,17 @@
+name = "tg-toolbox-emby-router"
+main = "src/index.ts"
+compatibility_date = "2024-09-25"
+workers_dev = true
+
+# KV 命名空间：先用 wrangler kv:namespace create EMBY_KV 创建，把 id 填回来
+[[kv_namespaces]]
+binding = "EMBY_KV"
+id = "REPLACE_ME_WITH_REAL_KV_NAMESPACE_ID"
+
+# 健康检测：每 1 分钟跑一次（Workers Free 最小间隔）
+[triggers]
+crons = ["*/1 * * * *"]
+
+# Secrets（用 `wrangler secret put <NAME>` 写入，不要写在这里）：
+#   ADMIN_TOKEN       管理 UI 登录与 import 接口
+#   EMBY_SYNC_TOKEN   与所有节点共享，推 /admin/sync 时用

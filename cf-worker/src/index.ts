@@ -1,0 +1,26 @@
+import { routeAdmin } from "./admin";
+import { runHealthCycle } from "./health";
+import { handleClientRequest } from "./router";
+import type { Env } from "./types";
+
+export default {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/__health") {
+      return new Response("ok", {
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+
+    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
+      return routeAdmin(request, env);
+    }
+
+    return handleClientRequest(request, env);
+  },
+
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    await runHealthCycle(env, ctx);
+  },
+} satisfies ExportedHandler<Env>;

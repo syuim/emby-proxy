@@ -1,0 +1,19 @@
+{
+  "name": "tg-toolbox-emby-router",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CF Worker: emby 反代统一入口（路由调度 + 健康检测 + 控制面 + 配置同步）",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.5.0",
+    "@cloudflare/workers-types": "^4.20240924.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "wrangler": "^3.78.0"
+  }
+}

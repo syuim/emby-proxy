@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Emby Router · 控制面</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+        margin: 0; background: #f5f6f8; color: #1f2328; }
+      header { background: #0d1117; color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+      header h1 { font-size: 16px; margin: 0; flex: 1; }
+      header button { background: transparent; color: #fff; border: 1px solid #444; padding: 4px 12px; border-radius: 4px; cursor: pointer; }
+      main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+      .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid #d0d7de; }
+      .tabs button { background: transparent; border: none; padding: 10px 18px; cursor: pointer; font-size: 14px; color: #57606a; border-bottom: 2px solid transparent; }
+      .tabs button.active { color: #0969da; border-bottom-color: #0969da; font-weight: 600; }
+      .panel { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 20px; }
+      .panel h2 { font-size: 15px; margin: 0 0 16px; }
+      .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+      input, select, textarea { font-family: inherit; font-size: 13px; padding: 6px 10px; border: 1px solid #d0d7de; border-radius: 4px; background: #fff; }
+      input[type="text"], input[type="url"], input[type="password"] { min-width: 240px; }
+      textarea { width: 100%; min-height: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      button.primary { background: #1f883d; color: #fff; border: 1px solid #1a7f37; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+      button.danger { background: #cf222e; color: #fff; border: 1px solid #a40e26; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+      button.ghost { background: #f6f8fa; color: #24292f; border: 1px solid #d0d7de; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { padding: 8px 10px; border-bottom: 1px solid #eaeef2; text-align: left; vertical-align: middle; }
+      th { background: #f6f8fa; font-weight: 600; }
+      .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+      .badge.ok { background: #dafbe1; color: #1a7f37; }
+      .badge.bad { background: #ffebe9; color: #cf222e; }
+      .badge.unknown { background: #eaeef2; color: #57606a; }
+      .toast { position: fixed; right: 24px; bottom: 24px; padding: 10px 16px; border-radius: 6px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+      .toast.ok { background: #dafbe1; color: #1a7f37; }
+      .toast.err { background: #ffebe9; color: #cf222e; }
+      .login-card { max-width: 380px; margin: 80px auto; padding: 32px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; }
+      .hint { color: #57606a; font-size: 12px; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #57606a; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      const $app = document.getElementById("app");
+      const state = { tab: "embys", nodes: [], embys: [], health: {} };
+
+      function toast(msg, type) {
+        const el = document.createElement("div");
+        el.className = "toast " + (type === "err" ? "err" : "ok");
+        el.textContent = msg;
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 3500);
+      }
+
+      async function api(path, opts) {
+        const resp = await fetch(path, {
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        return data;
+      }
+
+      async function checkAuth() {
+        try {
+          await api("/admin/api/me");
+          return true;
+        } catch {
+          return false;
+        }
+      }
+
+      async function refreshAll() {
+        const [n, e, h] = await Promise.all([
+          api("/admin/api/nodes"),
+          api("/admin/api/embys"),
+          api("/admin/api/health"),
+        ]);
+        state.nodes = n.nodes || [];
+        state.embys = e.embys || [];
+        state.health = h.nodes || {};
+        render();
+      }
+
+      function nodeName(id) {
+        const n = state.nodes.find((x) => x.id === id);
+        return n ? n.name : id;
+      }
+
+      function healthBadge(nodeId) {
+        const h = state.health[nodeId];
+        if (!h) return '<span class="badge unknown">未检测</span>';
+        if (h.healthy) return '<span class="badge ok">健康</span>';
+        return '<span class="badge bad">异常</span>';
+      }
+
+      function render() {
+        if (!state.authed) return renderLogin();
+        $app.innerHTML = `
+          <header>
+            <h1>🎬 Emby Router 控制面</h1>
+            <span class="mono">embys=${state.embys.length} nodes=${state.nodes.length}</span>
+            <button id="btn-refresh">刷新</button>
+            <button id="btn-logout">登出</button>
+          </header>
+          <main>
+            <div class="tabs">
+              <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
+              <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
+              <button data-tab="health" class="${state.tab === "health" ? "active" : ""}">Health</button>
+              <button data-tab="import" class="${state.tab === "import" ? "active" : ""}">Import</button>
+            </div>
+            <div id="tab-content"></div>
+          </main>
+        `;
+        $app.querySelector("#btn-refresh").onclick = () => refreshAll().catch((e) => toast(e.message, "err"));
+        $app.querySelector("#btn-logout").onclick = async () => {
+          await fetch("/admin/api/logout", { method: "POST" });
+          state.authed = false;
+          render();
+        };
+        $app.querySelectorAll(".tabs button").forEach((b) => {
+          b.onclick = () => { state.tab = b.dataset.tab; render(); };
+        });
+        if (state.tab === "embys") renderEmbys();
+        else if (state.tab === "nodes") renderNodes();
+        else if (state.tab === "health") renderHealth();
+        else if (state.tab === "import") renderImport();
+      }
+
+      function renderLogin() {
+        $app.innerHTML = `
+          <div class="login-card">
+            <h2>登录</h2>
+            <p class="hint">请输入 ADMIN_TOKEN（wrangler secret 中配置）</p>
+            <div class="row">
+              <input type="password" id="login-token" placeholder="ADMIN_TOKEN" autofocus />
+            </div>
+            <div class="row">
+              <button class="primary" id="btn-login">登录</button>
+            </div>
+          </div>
+        `;
+        $app.querySelector("#btn-login").onclick = async () => {
+          const t = $app.querySelector("#login-token").value;
+          try {
+            await api("/admin/api/login", { method: "POST", body: JSON.stringify({ token: t }) });
+            state.authed = true;
+            await refreshAll();
+          } catch (e) {
+            toast(e.message, "err");
+          }
+        };
+        $app.querySelector("#login-token").addEventListener("keydown", (e) => {
+          if (e.key === "Enter") $app.querySelector("#btn-login").click();
+        });
+      }
+
+      function renderEmbys() {
+        const c = $app.querySelector("#tab-content");
+        const optionsHtml = state.nodes.map((n) => `<option value="${n.id}">${n.name}</option>`).join("");
+        c.innerHTML = `
+          <div class="panel">
+            <h2>添加 Emby</h2>
+            <div class="row">
+              <input id="e-name" placeholder="emby_name (URL 第一段)" />
+              <input id="e-backend" placeholder="backend_url (http://emby.internal:8096)" />
+            </div>
+            <div class="row">
+              <label>主节点</label>
+              <select id="e-primary">${optionsHtml}</select>
+              <label>备用节点（多选）</label>
+              <select id="e-backups" multiple style="height: 80px;">${optionsHtml}</select>
+              <button class="primary" id="e-add">添加</button>
+            </div>
+            <p class="hint">URL: <span class="mono">https://你的入口域名/&lt;emby_name&gt;/...</span> → 307 转到健康节点</p>
+          </div>
+          <div class="panel" style="margin-top: 16px;">
+            <h2>Emby 列表</h2>
+            <table>
+              <thead><tr><th>名称</th><th>后端</th><th>主节点</th><th>备用节点</th><th>操作</th></tr></thead>
+              <tbody>
+                ${state.embys.map((e) => `
+                  <tr data-name="${e.name}">
+                    <td><strong>${e.name}</strong></td>
+                    <td class="mono">${e.backend_url}</td>
+                    <td>${nodeName(e.primary_node_id)}</td>
+                    <td>${e.backup_node_ids.map(nodeName).join(", ") || "<span class=\"hint\">-</span>"}</td>
+                    <td>
+                      <button class="ghost" data-act="edit">编辑</button>
+                      <button class="danger" data-act="del">删除</button>
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        `;
+        c.querySelector("#e-add").onclick = async () => {
+          const name = c.querySelector("#e-name").value.trim();
+          const backend = c.querySelector("#e-backend").value.trim();
+          const primary = c.querySelector("#e-primary").value;
+          const backups = Array.from(c.querySelector("#e-backups").selectedOptions).map((o) => o.value);
+          try {
+            await api("/admin/api/embys", { method: "POST", body: JSON.stringify({
+              name, backend_url: backend, primary_node_id: primary, backup_node_ids: backups,
+            }) });
+            toast("已添加并推送到所有节点", "ok");
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+        c.querySelectorAll("tbody tr").forEach((tr) => {
+          const name = tr.dataset.name;
+          tr.querySelector('[data-act="del"]').onclick = async () => {
+            if (!confirm(`确认删除 emby '${name}'？`)) return;
+            try {
+              await api("/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
+              toast("已删除", "ok");
+              await refreshAll();
+            } catch (e) { toast(e.message, "err"); }
+          };
+          tr.querySelector('[data-act="edit"]').onclick = () => {
+            const cur = state.embys.find((x) => x.name === name);
+            const newBackend = prompt("backend_url", cur.backend_url);
+            if (newBackend === null) return;
+            const newPrimary = prompt(
+              "primary_node_id (可选: " + state.nodes.map((n) => `${n.id}=${n.name}`).join(", ") + ")",
+              cur.primary_node_id,
+            );
+            if (newPrimary === null) return;
+            api("/admin/api/embys/" + encodeURIComponent(name), {
+              method: "PUT",
+              body: JSON.stringify({ backend_url: newBackend, primary_node_id: newPrimary }),
+            }).then(() => { toast("已更新", "ok"); refreshAll(); }).catch((e) => toast(e.message, "err"));
+          };
+        });
+      }
+
+      function renderNodes() {
+        const c = $app.querySelector("#tab-content");
+        c.innerHTML = `
+          <div class="panel">
+            <h2>添加节点</h2>
+            <div class="row">
+              <input id="n-name" placeholder="节点名 (us-1)" />
+              <input id="n-url" placeholder="public_url (https://us.example.com)" />
+              <button class="primary" id="n-add">添加</button>
+            </div>
+          </div>
+          <div class="panel" style="margin-top: 16px;">
+            <h2>节点列表</h2>
+            <table>
+              <thead><tr><th>ID</th><th>名称</th><th>public_url</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody>
+                ${state.nodes.map((n) => `
+                  <tr data-id="${n.id}">
+                    <td class="mono">${n.id}</td>
+                    <td><strong>${n.name}</strong></td>
+                    <td class="mono">${n.public_url}</td>
+                    <td>${healthBadge(n.id)}</td>
+                    <td><button class="danger" data-act="del">删除</button></td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        `;
+        c.querySelector("#n-add").onclick = async () => {
+          const name = c.querySelector("#n-name").value.trim();
+          const url = c.querySelector("#n-url").value.trim();
+          try {
+            await api("/admin/api/nodes", { method: "POST", body: JSON.stringify({ name, public_url: url }) });
+            toast("已添加节点", "ok");
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+        c.querySelectorAll("tbody tr").forEach((tr) => {
+          const id = tr.dataset.id;
+          tr.querySelector('[data-act="del"]').onclick = async () => {
+            if (!confirm("确认删除节点？")) return;
+            try {
+              await api("/admin/api/nodes/" + encodeURIComponent(id), { method: "DELETE" });
+              toast("已删除", "ok");
+              await refreshAll();
+            } catch (e) { toast(e.message, "err"); }
+          };
+        });
+      }
+
+      function renderHealth() {
+        const c = $app.querySelector("#tab-content");
+        c.innerHTML = `
+          <div class="panel">
+            <div class="row">
+              <h2 style="margin: 0; flex: 1;">节点健康</h2>
+              <button class="primary" id="h-sync">手动重推所有节点</button>
+            </div>
+            <table>
+              <thead><tr><th>节点</th><th>状态</th><th>延迟</th><th>连续失败</th><th>已应用 version</th><th>最近同步错误</th><th>最近检测</th></tr></thead>
+              <tbody>
+                ${state.nodes.map((n) => {
+                  const h = state.health[n.id] || {};
+                  return `
+                    <tr>
+                      <td><strong>${n.name}</strong> <span class="mono">${n.id}</span></td>
+                      <td>${healthBadge(n.id)}</td>
+                      <td>${h.last_latency_ms ?? "-"} ms</td>
+                      <td>${h.consecutive_fails ?? 0}</td>
+                      <td>${h.applied_version ?? "-"}</td>
+                      <td class="mono" style="max-width: 280px; word-break: break-all;">${h.last_sync_error ?? "-"}</td>
+                      <td class="mono">${h.last_check ?? "-"}</td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+        `;
+        c.querySelector("#h-sync").onclick = async () => {
+          try {
+            const r = await api("/admin/api/sync", { method: "POST" });
+            const ok = r.push_results.filter((x) => x.status === "ok").length;
+            const total = r.push_results.length;
+            toast(`已重推：${ok}/${total} 成功`, ok === total ? "ok" : "err");
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+      }
+
+      function renderImport() {
+        const c = $app.querySelector("#tab-content");
+        c.innerHTML = `
+          <div class="panel">
+            <h2>批量导入（覆盖现有 KV）</h2>
+            <p class="hint">粘贴 JSON：<span class="mono">{"nodes":[...], "embys":[...]}</span>，导入后立即推送到所有节点。</p>
+            <textarea id="imp-body" placeholder='{
+  "nodes": [
+    {"name": "us-1", "public_url": "https://us.example.com"}
+  ],
+  "embys": [
+    {"name": "embyA", "backend_url": "http://emby.internal:8096",
+     "primary_node_id": "n_xxxxxxxx", "backup_node_ids": []}
+  ]
+}'></textarea>
+            <div class="row" style="margin-top: 12px;">
+              <button class="primary" id="imp-go">导入并推送</button>
+              <span class="hint">⚠️ 会整体替换现有 KV 数据</span>
+            </div>
+          </div>
+        `;
+        c.querySelector("#imp-go").onclick = async () => {
+          if (!confirm("确认覆盖现有配置？")) return;
+          let body;
+          try { body = JSON.parse(c.querySelector("#imp-body").value); }
+          catch (e) { return toast("JSON 解析失败: " + e.message, "err"); }
+          try {
+            const r = await api("/admin/api/import", { method: "POST", body: JSON.stringify(body) });
+            toast(`导入完成：nodes=${r.nodes} embys=${r.embys}`, "ok");
+            state.tab = "embys";
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+      }
+
+      (async () => {
+        state.authed = await checkAuth();
+        if (state.authed) await refreshAll();
+        else render();
+      })().catch((e) => toast(e.message, "err"));
+    </script>
+  </body>
+</html>
