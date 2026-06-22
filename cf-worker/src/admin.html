@@ -401,7 +401,7 @@
     <div id="app"></div>
     <script>
       const $app = document.getElementById("app");
-      const state = { tab: "embys", nodes: [], embys: [], health: {}, theme: "auto", editingEmby: null };
+      const state = { tab: "embys", nodes: [], embys: [], health: {}, theme: "auto", editingEmby: null, editingNode: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -710,8 +710,30 @@
                   <tbody>
                     ${state.nodes.map((n) => {
                       const h = state.health[n.id] || {};
+                      const editing = state.editingNode === n.id;
+                      if (editing) {
+                        return `
+                          <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
+                            <td><div class="stack-name">
+                              <input class="row-name" value="${escapeHtml(n.name)}" />
+                              <span class="mono">${escapeHtml(n.id)}</span>
+                            </div></td>
+                            <td><input class="row-url mono" value="${escapeHtml(n.public_url)}" /></td>
+                            <td>${healthBadge(n.id)}</td>
+                            <td class="mono">${h.last_latency_ms ?? "-"}${h.last_latency_ms != null ? " ms" : ""}</td>
+                            <td class="mono">${h.consecutive_fails ?? 0}</td>
+                            <td class="mono">${h.applied_version ?? "-"}</td>
+                            <td class="mono" style="max-width:240px;word-break:break-all;">${escapeHtml(h.last_sync_error ?? "-")}</td>
+                            <td class="mono">${escapeHtml(h.last_check ?? "-")}</td>
+                            <td class="actions">
+                              <button class="btn btn-primary" data-act="save">保存</button>
+                              <button class="btn btn-ghost" data-act="cancel">取消</button>
+                            </td>
+                          </tr>
+                        `;
+                      }
                       return `
-                        <tr data-id="${escapeHtml(n.id)}">
+                        <tr data-id="${escapeHtml(n.id)}" data-mode="view">
                           <td><div class="stack-name">
                             <strong>${escapeHtml(n.name)}</strong>
                             <span class="mono">${escapeHtml(n.id)}</span>
@@ -723,7 +745,10 @@
                           <td class="mono">${h.applied_version ?? "-"}</td>
                           <td class="mono" style="max-width:240px;word-break:break-all;">${escapeHtml(h.last_sync_error ?? "-")}</td>
                           <td class="mono">${escapeHtml(h.last_check ?? "-")}</td>
-                          <td class="actions"><button class="btn btn-danger" data-act="del">删除</button></td>
+                          <td class="actions">
+                            <button class="btn btn-ghost" data-act="edit">编辑</button>
+                            <button class="btn btn-danger" data-act="del">删除</button>
+                          </td>
                         </tr>
                       `;
                     }).join("")}
@@ -752,14 +777,42 @@
         };
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const id = tr.dataset.id;
-          tr.querySelector('[data-act="del"]').onclick = async () => {
-            if (!confirm("确认删除节点？")) return;
-            try {
-              await api("/admin/api/nodes/" + encodeURIComponent(id), { method: "DELETE" });
-              toast("已删除", "ok");
-              await refreshAll();
-            } catch (e) { toast(e.message, "err"); }
-          };
+          const mode = tr.dataset.mode;
+          if (mode === "view") {
+            tr.querySelector('[data-act="edit"]').onclick = () => {
+              state.editingNode = id;
+              render();
+            };
+            tr.querySelector('[data-act="del"]').onclick = async () => {
+              if (!confirm("确认删除节点？")) return;
+              try {
+                await api("/admin/api/nodes/" + encodeURIComponent(id), { method: "DELETE" });
+                toast("已删除", "ok");
+                await refreshAll();
+              } catch (e) { toast(e.message, "err"); }
+            };
+          } else {
+            const $name = tr.querySelector(".row-name");
+            const $url = tr.querySelector(".row-url");
+            tr.querySelector('[data-act="save"]').onclick = async () => {
+              const name = $name.value.trim();
+              const url = $url.value.trim();
+              if (!name || !url) { toast("名称与 public_url 不能为空", "err"); return; }
+              try {
+                await api("/admin/api/nodes/" + encodeURIComponent(id), {
+                  method: "PUT",
+                  body: JSON.stringify({ name, public_url: url }),
+                });
+                toast("已保存节点", "ok");
+                state.editingNode = null;
+                await refreshAll();
+              } catch (e) { toast(e.message, "err"); }
+            };
+            tr.querySelector('[data-act="cancel"]').onclick = () => {
+              state.editingNode = null;
+              render();
+            };
+          }
         });
       }
 
