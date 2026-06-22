@@ -93,8 +93,18 @@ func (s *Store) GetState() map[string]any {
 	}
 }
 
-// ApplySnapshot replaces config and persists to disk atomically.
-func (s *Store) ApplySnapshot(version int, proxies []ProxyEntry) {
+// SnapshotDiff records what changed during ApplySnapshot.
+type SnapshotDiff struct {
+	OldVersion int
+	NewVersion int
+	Added      []string
+	Removed    []string
+	Changed    []string // prefix existed in both but backend_url changed
+}
+
+// ApplySnapshot replaces config and persists to disk atomically. It returns a
+// diff describing what changed so the caller can log it.
+func (s *Store) ApplySnapshot(version int, proxies []ProxyEntry) SnapshotDiff {
 	filtered := make([]ProxyEntry, 0, len(proxies))
 	for _, p := range proxies {
 		if isDangerousBackendURL(p.BackendURL) {
@@ -105,15 +115,31 @@ func (s *Store) ApplySnapshot(version int, proxies []ProxyEntry) {
 	}
 
 	s.mu.Lock()
-	s.version = version
-	s.proxies = make(map[string]string, len(filtered))
+	diff := SnapshotDiff{OldVersion: s.version, NewVersion: version}
+	oldProxies := s.proxies
+	newProxies := make(map[string]string, len(filtered))
 	for _, p := range filtered {
-		s.proxies[p.PathPrefix] = p.BackendURL
+		newProxies[p.PathPrefix] = p.BackendURL
 	}
+	for k, v := range newProxies {
+		if oldV, ok := oldProxies[k]; !ok {
+			diff.Added = append(diff.Added, k)
+		} else if oldV != v {
+			diff.Changed = append(diff.Changed, k)
+		}
+	}
+	for k := range oldProxies {
+		if _, ok := newProxies[k]; !ok {
+			diff.Removed = append(diff.Removed, k)
+		}
+	}
+	s.version = version
+	s.proxies = newProxies
 	s.mu.Unlock()
 
 	s.persist(version, filtered)
 	log.Printf("snapshot applied: version=%d proxies=%d", version, len(filtered))
+	return diff
 }
 
 func (s *Store) persist(version int, proxies []ProxyEntry) {

@@ -166,8 +166,13 @@ async function backfillOutdatedNodes(
   if (stale.length === 0) return;
 
   const snapshot = buildSnapshot(embysKV);
+  console.log(
+    `[sync] backfill triggered targets=${stale.length} target_version=${targetVersion}`,
+  );
   const results = await Promise.all(
-    stale.map((o) => pushSnapshotToNode(o.node, snapshot, env.EMBY_SYNC_TOKEN)),
+    stale.map((o) =>
+      pushSnapshotToNode(o.node, snapshot, env.EMBY_SYNC_TOKEN, "cron-backfill"),
+    ),
   );
   // 把推送结果写回 health.last_sync_error
   await mergeSyncResults(env, health, results, nodes);

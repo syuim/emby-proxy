@@ -486,7 +486,6 @@
             <div class="tabs">
               <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
               <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
-              <button data-tab="import" class="${state.tab === "import" ? "active" : ""}">Import</button>
             </div>
             <div id="tab-content"></div>
           </main>
@@ -503,7 +502,6 @@
         });
         if (state.tab === "embys") renderEmbys();
         else if (state.tab === "nodes") renderNodes();
-        else if (state.tab === "import") renderImport();
       }
 
       function renderLogin() {
@@ -567,20 +565,24 @@
             `}
           </div>
           <div class="panel">
-            <div class="toolbar"><h2>Emby 列表</h2></div>
+            <div class="toolbar"><h2>Emby 列表</h2><span class="hint">改 backend / 节点后点"保存"立即推送</span></div>
             ${state.embys.length === 0
               ? '<div class="empty"><div class="empty-icon">📭</div>还没有 emby 配置</div>'
               : `<div class="table-wrap"><table>
-                  <thead><tr><th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:140px;">操作</th></tr></thead>
+                  <thead><tr><th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:170px;">操作</th></tr></thead>
                   <tbody>
                     ${state.embys.map((e) => `
                       <tr data-name="${escapeHtml(e.name)}">
                         <td><strong>${escapeHtml(e.name)}</strong></td>
-                        <td class="mono">${escapeHtml(e.backend_url)}</td>
-                        <td>${escapeHtml(nodeName(e.node_id))}</td>
+                        <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
+                        <td>
+                          <select class="row-node">
+                            ${state.nodes.map((n) => `<option value="${escapeHtml(n.id)}" ${n.id === e.node_id ? "selected" : ""}>${escapeHtml(n.name)}</option>`).join("")}
+                          </select>
+                        </td>
                         <td>${healthBadge(e.node_id)}</td>
                         <td class="actions">
-                          <button class="btn btn-ghost" data-act="edit">编辑</button>
+                          <button class="btn btn-primary" data-act="save" disabled>保存</button>
                           <button class="btn btn-danger" data-act="del">删除</button>
                         </td>
                       </tr>
@@ -605,27 +607,43 @@
             } catch (e) { toast(e.message, "err"); }
           };
         }
+
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const name = tr.dataset.name;
-          tr.querySelector('[data-act="del"]').onclick = async () => {
+          const cur = state.embys.find((x) => x.name === name);
+          const $backend = tr.querySelector(".row-backend");
+          const $node = tr.querySelector(".row-node");
+          const $save = tr.querySelector('[data-act="save"]');
+          const $del = tr.querySelector('[data-act="del"]');
+
+          const checkDirty = () => {
+            const dirty = $backend.value.trim() !== cur.backend_url || $node.value !== cur.node_id;
+            $save.disabled = !dirty;
+          };
+          $backend.addEventListener("input", checkDirty);
+          $node.addEventListener("change", checkDirty);
+
+          $save.onclick = async () => {
+            const newBackend = $backend.value.trim();
+            const newNode = $node.value;
+            if (!newBackend) { toast("backend_url 不能为空", "err"); return; }
+            try {
+              await api("/admin/api/embys/" + encodeURIComponent(name), {
+                method: "PUT",
+                body: JSON.stringify({ backend_url: newBackend, node_id: newNode }),
+              });
+              toast(`已保存并推送：${name}`, "ok");
+              await refreshAll();
+            } catch (e) { toast(e.message, "err"); }
+          };
+
+          $del.onclick = async () => {
             if (!confirm(`确认删除 emby '${name}'？`)) return;
             try {
               await api("/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
               toast("已删除", "ok");
               await refreshAll();
             } catch (e) { toast(e.message, "err"); }
-          };
-          tr.querySelector('[data-act="edit"]').onclick = () => {
-            const cur = state.embys.find((x) => x.name === name);
-            const newBackend = prompt("backend_url", cur.backend_url);
-            if (newBackend === null) return;
-            const nodeChoices = state.nodes.map((n) => `${n.id}=${n.name}`).join(", ");
-            const newNode = prompt("node_id (可选: " + nodeChoices + ")", cur.node_id);
-            if (newNode === null) return;
-            api("/admin/api/embys/" + encodeURIComponent(name), {
-              method: "PUT",
-              body: JSON.stringify({ backend_url: newBackend, node_id: newNode }),
-            }).then(() => { toast("已更新", "ok"); refreshAll(); }).catch((e) => toast(e.message, "err"));
           };
         });
       }
@@ -724,41 +742,6 @@
             } catch (e) { toast(e.message, "err"); }
           };
         });
-      }
-
-      // ---------- Import ----------
-      function renderImport() {
-        const c = $app.querySelector("#tab-content");
-        c.innerHTML = `
-          <div class="panel">
-            <h2>批量导入（覆盖现有 KV）</h2>
-            <p class="hint">粘贴 JSON：<span class="mono">{"nodes":[...], "embys":[...]}</span>，导入后立即推送到所有节点。</p>
-            <textarea id="imp-body" placeholder='{
-  "nodes": [
-    {"name": "us-1", "public_url": "https://us.example.com"}
-  ],
-  "embys": [
-    {"name": "embyA", "backend_url": "http://emby.internal:8096", "node_id": "n_xxxxxxxx"}
-  ]
-}'></textarea>
-            <div class="actions" style="margin-top: 14px;">
-              <button class="btn btn-primary" id="imp-go">导入并推送</button>
-              <span class="hint">⚠️ 会整体替换现有 KV 数据</span>
-            </div>
-          </div>
-        `;
-        c.querySelector("#imp-go").onclick = async () => {
-          if (!confirm("确认覆盖现有配置？")) return;
-          let body;
-          try { body = JSON.parse(c.querySelector("#imp-body").value); }
-          catch (e) { return toast("JSON 解析失败: " + e.message, "err"); }
-          try {
-            const r = await api("/admin/api/import", { method: "POST", body: JSON.stringify(body) });
-            toast(`导入完成：nodes=${r.nodes} embys=${r.embys}`, "ok");
-            state.tab = "embys";
-            await refreshAll();
-          } catch (e) { toast(e.message, "err"); }
-        };
       }
 
       // ---------- 启动 ----------

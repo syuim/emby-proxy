@@ -131,7 +131,7 @@ export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Respons
   embys.version += 1;
   embys.embys.push(record);
   await writeEmbys(env, embys);
-  const push = await fanoutPush(env, embys, nodes);
+  const push = await fanoutPush(env, embys, nodes, "add-emby");
   return json(201, { ok: true, emby: record, push_results: push });
 }
 
@@ -158,7 +158,7 @@ export async function handleUpdateEmby(
 
   embys.version += 1;
   await writeEmbys(env, embys);
-  const push = await fanoutPush(env, embys, nodes);
+  const push = await fanoutPush(env, embys, nodes, "update-emby");
   return json(200, { ok: true, emby, push_results: push });
 }
 
@@ -171,7 +171,7 @@ export async function handleDeleteEmby(env: Env, name: string): Promise<Response
   }
   embys.version += 1;
   await writeEmbys(env, embys);
-  const push = await fanoutPush(env, embys, nodes);
+  const push = await fanoutPush(env, embys, nodes, "delete-emby");
   return json(200, { ok: true, push_results: push });
 }
 
@@ -182,73 +182,8 @@ export async function handleHealth(env: Env): Promise<Response> {
 
 export async function handleManualSync(env: Env): Promise<Response> {
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
-  const push = await fanoutPush(env, embys, nodes);
+  const push = await fanoutPush(env, embys, nodes, "manual-resync");
   return json(200, { ok: true, push_results: push });
-}
-
-/**
- * 整体替换 KV：覆盖 nodes + embys，立即推所有节点。
- * Body: {nodes: NodeRecord[], embys: EmbyRecord[]}
- */
-export async function handleImport(req: JsonRequest, env: Env): Promise<Response> {
-  const body = req.body;
-  if (!body || !Array.isArray(body.nodes) || !Array.isArray(body.embys)) {
-    return json(400, { error: "需提供 {nodes:[], embys:[]}" });
-  }
-  const incomingNodes = body.nodes as Partial<NodeRecord>[];
-  const incomingEmbys = body.embys as Partial<EmbyRecord>[];
-
-  const nodesKV: NodesKV = { version: 1, nodes: [] };
-  for (const n of incomingNodes) {
-    const id = typeof n.id === "string" && n.id ? n.id : generateNodeId(nodesKV);
-    const cand: NodeRecord = {
-      id,
-      name: (n.name ?? "").toString().trim(),
-      public_url: (n.public_url ?? "").toString().trim().replace(/\/$/, ""),
-      created_at: n.created_at ?? new Date().toISOString(),
-    };
-    const err = validateNode(cand);
-    if (err) return json(400, { error: `节点 ${cand.name || cand.id}: ${err}` });
-    if (nodesKV.nodes.some((x) => x.id === cand.id || x.name === cand.name)) {
-      return json(400, { error: `节点重复：${cand.name}` });
-    }
-    nodesKV.nodes.push(cand);
-  }
-
-  const embysKV: EmbysKV = { version: 1, embys: [] };
-  for (const e of incomingEmbys) {
-    const incomingNodeId =
-      typeof (e as any).node_id === "string"
-        ? (e as any).node_id
-        : typeof (e as any).primary_node_id === "string"
-          ? (e as any).primary_node_id
-          : "";
-    const cand: EmbyRecord = {
-      name: (e.name ?? "").toString().trim(),
-      backend_url: (e.backend_url ?? "").toString().trim().replace(/\/$/, ""),
-      node_id: incomingNodeId.toString(),
-      created_at: e.created_at ?? new Date().toISOString(),
-    };
-    const err = validateEmby(cand);
-    if (err) return json(400, { error: `emby ${cand.name}: ${err}` });
-    const refErr = checkNodeRefs(cand, nodesKV);
-    if (refErr) return json(400, { error: `emby ${cand.name}: ${refErr}` });
-    if (embysKV.embys.some((x) => x.name === cand.name)) {
-      return json(400, { error: `emby 重复：${cand.name}` });
-    }
-    embysKV.embys.push(cand);
-  }
-
-  await writeNodes(env, nodesKV);
-  await writeEmbys(env, embysKV);
-
-  const push = await fanoutPush(env, embysKV, nodesKV);
-  return json(200, {
-    ok: true,
-    nodes: nodesKV.nodes.length,
-    embys: embysKV.embys.length,
-    push_results: push,
-  });
 }
 
 // ---------- helpers ----------
@@ -257,10 +192,19 @@ async function fanoutPush(
   env: Env,
   embys: EmbysKV,
   nodes: NodesKV,
+  trigger: string,
 ): Promise<PushResult[]> {
-  if (nodes.nodes.length === 0) return [];
+  if (nodes.nodes.length === 0) {
+    console.log(`[sync] fanout skipped trigger=${trigger} reason=no-nodes`);
+    return [];
+  }
   const snapshot = buildSnapshot(embys);
-  const results = await pushSnapshotToAll(nodes.nodes, snapshot, env.EMBY_SYNC_TOKEN);
+  const results = await pushSnapshotToAll(
+    nodes.nodes,
+    snapshot,
+    env.EMBY_SYNC_TOKEN,
+    trigger,
+  );
   const baseHealth = await readHealth(env);
   await mergeSyncResults(env, baseHealth, results, nodes.nodes);
   return results;

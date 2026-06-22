@@ -7,7 +7,6 @@ import {
   handleDeleteEmby,
   handleDeleteNode,
   handleHealth,
-  handleImport,
   handleListEmbys,
   handleListNodes,
   handleManualSync,
@@ -74,9 +73,6 @@ export async function routeAdmin(request: Request, env: Env): Promise<Response> 
   // Health & manual sync
   if (path === "/admin/api/health" && method === "GET") return handleHealth(env);
   if (path === "/admin/api/sync" && method === "POST") return handleManualSync(env);
-  if (path === "/admin/api/import" && method === "POST") {
-    return wrapJson(request, (req) => handleImport(req, env));
-  }
 
   return jsonError(404, "not found");
 }

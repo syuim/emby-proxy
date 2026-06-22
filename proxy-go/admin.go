@@ -27,8 +27,11 @@ func (ah *AdminHandler) checkAuth(r *http.Request) bool {
 
 // HandleSync receives config snapshot pushes from master: POST /admin/sync
 func (ah *AdminHandler) HandleSync(w http.ResponseWriter, r *http.Request) {
+	log.Printf("sync: incoming remote=%s ua=%q content_length=%d",
+		r.RemoteAddr, r.Header.Get("User-Agent"), r.ContentLength)
+
 	if !ah.checkAuth(r) {
-		log.Printf("sync auth failed: remote=%s ua=%s", r.RemoteAddr, r.Header.Get("User-Agent"))
+		log.Printf("sync: auth failed remote=%s", r.RemoteAddr)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -38,6 +41,7 @@ func (ah *AdminHandler) HandleSync(w http.ResponseWriter, r *http.Request) {
 		Proxies []ProxyEntry `json:"proxies"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+		log.Printf("sync: bad json remote=%s err=%v", r.RemoteAddr, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
@@ -46,11 +50,13 @@ func (ah *AdminHandler) HandleSync(w http.ResponseWriter, r *http.Request) {
 		data.Proxies = []ProxyEntry{}
 	}
 
-	ah.store.ApplySnapshot(data.Version, data.Proxies)
-	log.Printf("sync push accepted: remote=%s version=%d proxies=%d",
-		r.RemoteAddr, data.Version, len(data.Proxies))
+	diff := ah.store.ApplySnapshot(data.Version, data.Proxies)
+	log.Printf("sync: applied remote=%s old_version=%d new_version=%d incoming_proxies=%d added=%v removed=%v changed=%v",
+		r.RemoteAddr, diff.OldVersion, diff.NewVersion, len(data.Proxies),
+		diff.Added, diff.Removed, diff.Changed)
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":             true,
+		"ok":              true,
 		"applied_version": data.Version,
 	})
 }
