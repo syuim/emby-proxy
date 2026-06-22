@@ -401,7 +401,7 @@
     <div id="app"></div>
     <script>
       const $app = document.getElementById("app");
-      const state = { tab: "embys", nodes: [], embys: [], health: {}, theme: "auto" };
+      const state = { tab: "embys", nodes: [], embys: [], health: {}, theme: "auto", editingEmby: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -565,28 +565,45 @@
             `}
           </div>
           <div class="panel">
-            <div class="toolbar"><h2>Emby 列表</h2><span class="hint">改 backend / 节点后点"保存"立即推送</span></div>
+            <div class="toolbar"><h2>Emby 列表</h2></div>
             ${state.embys.length === 0
               ? '<div class="empty"><div class="empty-icon">📭</div>还没有 emby 配置</div>'
               : `<div class="table-wrap"><table>
-                  <thead><tr><th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:170px;">操作</th></tr></thead>
+                  <thead><tr><th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:200px;">操作</th></tr></thead>
                   <tbody>
-                    ${state.embys.map((e) => `
-                      <tr data-name="${escapeHtml(e.name)}">
-                        <td><strong>${escapeHtml(e.name)}</strong></td>
-                        <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
-                        <td>
-                          <select class="row-node">
-                            ${state.nodes.map((n) => `<option value="${escapeHtml(n.id)}" ${n.id === e.node_id ? "selected" : ""}>${escapeHtml(n.name)}</option>`).join("")}
-                          </select>
-                        </td>
-                        <td>${healthBadge(e.node_id)}</td>
-                        <td class="actions">
-                          <button class="btn btn-primary" data-act="save" disabled>保存</button>
-                          <button class="btn btn-danger" data-act="del">删除</button>
-                        </td>
-                      </tr>
-                    `).join("")}
+                    ${state.embys.map((e) => {
+                      const editing = state.editingEmby === e.name;
+                      if (editing) {
+                        return `
+                          <tr data-name="${escapeHtml(e.name)}" data-mode="edit">
+                            <td><strong>${escapeHtml(e.name)}</strong></td>
+                            <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
+                            <td>
+                              <select class="row-node">
+                                ${state.nodes.map((n) => `<option value="${escapeHtml(n.id)}" ${n.id === e.node_id ? "selected" : ""}>${escapeHtml(n.name)}</option>`).join("")}
+                              </select>
+                            </td>
+                            <td>${healthBadge(e.node_id)}</td>
+                            <td class="actions">
+                              <button class="btn btn-primary" data-act="save">保存</button>
+                              <button class="btn btn-ghost" data-act="cancel">取消</button>
+                            </td>
+                          </tr>
+                        `;
+                      }
+                      return `
+                        <tr data-name="${escapeHtml(e.name)}" data-mode="view">
+                          <td><strong>${escapeHtml(e.name)}</strong></td>
+                          <td class="mono">${escapeHtml(e.backend_url)}</td>
+                          <td>${escapeHtml(nodeName(e.node_id))}</td>
+                          <td>${healthBadge(e.node_id)}</td>
+                          <td class="actions">
+                            <button class="btn btn-ghost" data-act="edit">编辑</button>
+                            <button class="btn btn-danger" data-act="del">删除</button>
+                          </td>
+                        </tr>
+                      `;
+                    }).join("")}
                   </tbody>
                 </table></div>`
             }
@@ -610,41 +627,43 @@
 
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const name = tr.dataset.name;
-          const cur = state.embys.find((x) => x.name === name);
-          const $backend = tr.querySelector(".row-backend");
-          const $node = tr.querySelector(".row-node");
-          const $save = tr.querySelector('[data-act="save"]');
-          const $del = tr.querySelector('[data-act="del"]');
+          const mode = tr.dataset.mode;
 
-          const checkDirty = () => {
-            const dirty = $backend.value.trim() !== cur.backend_url || $node.value !== cur.node_id;
-            $save.disabled = !dirty;
-          };
-          $backend.addEventListener("input", checkDirty);
-          $node.addEventListener("change", checkDirty);
-
-          $save.onclick = async () => {
-            const newBackend = $backend.value.trim();
-            const newNode = $node.value;
-            if (!newBackend) { toast("backend_url 不能为空", "err"); return; }
-            try {
-              await api("/admin/api/embys/" + encodeURIComponent(name), {
-                method: "PUT",
-                body: JSON.stringify({ backend_url: newBackend, node_id: newNode }),
-              });
-              toast(`已保存并推送：${name}`, "ok");
-              await refreshAll();
-            } catch (e) { toast(e.message, "err"); }
-          };
-
-          $del.onclick = async () => {
-            if (!confirm(`确认删除 emby '${name}'？`)) return;
-            try {
-              await api("/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
-              toast("已删除", "ok");
-              await refreshAll();
-            } catch (e) { toast(e.message, "err"); }
-          };
+          if (mode === "view") {
+            tr.querySelector('[data-act="edit"]').onclick = () => {
+              state.editingEmby = name;
+              render();
+            };
+            tr.querySelector('[data-act="del"]').onclick = async () => {
+              if (!confirm(`确认删除 emby '${name}'？`)) return;
+              try {
+                await api("/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
+                toast("已删除", "ok");
+                await refreshAll();
+              } catch (e) { toast(e.message, "err"); }
+            };
+          } else {
+            const $backend = tr.querySelector(".row-backend");
+            const $node = tr.querySelector(".row-node");
+            tr.querySelector('[data-act="save"]').onclick = async () => {
+              const newBackend = $backend.value.trim();
+              const newNode = $node.value;
+              if (!newBackend) { toast("backend_url 不能为空", "err"); return; }
+              try {
+                await api("/admin/api/embys/" + encodeURIComponent(name), {
+                  method: "PUT",
+                  body: JSON.stringify({ backend_url: newBackend, node_id: newNode }),
+                });
+                toast(`已保存并推送：${name}`, "ok");
+                state.editingEmby = null;
+                await refreshAll();
+              } catch (e) { toast(e.message, "err"); }
+            };
+            tr.querySelector('[data-act="cancel"]').onclick = () => {
+              state.editingEmby = null;
+              render();
+            };
+          }
         });
       }
 
