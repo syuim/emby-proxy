@@ -13,8 +13,7 @@ export interface NodesKV {
 export interface EmbyRecord {
   name: string;
   backend_url: string;
-  primary_node_id: string;
-  backup_node_ids: string[];
+  node_id: string;
   created_at: string;
 }
 

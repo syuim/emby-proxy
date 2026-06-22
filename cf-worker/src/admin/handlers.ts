@@ -88,9 +88,7 @@ export async function handleUpdateNode(
 
 export async function handleDeleteNode(env: Env, id: string): Promise<Response> {
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
-  const refs = embys.embys.filter(
-    (e) => e.primary_node_id === id || e.backup_node_ids.includes(id),
-  );
+  const refs = embys.embys.filter((e) => e.node_id === id);
   if (refs.length > 0) {
     return json(400, {
       error: `节点被以下 emby 引用，请先解绑：${refs.map((r) => r.name).join(", ")}`,
@@ -112,15 +110,12 @@ export async function handleListEmbys(env: Env): Promise<Response> {
 }
 
 export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Response> {
-  const { name, backend_url, primary_node_id, backup_node_ids } = req.body ?? {};
+  const { name, backend_url, node_id } = req.body ?? {};
   const trimmed: Omit<EmbyRecord, "created_at"> = {
     name: typeof name === "string" ? name.trim() : "",
     backend_url:
       typeof backend_url === "string" ? backend_url.trim().replace(/\/$/, "") : "",
-    primary_node_id: typeof primary_node_id === "string" ? primary_node_id : "",
-    backup_node_ids: Array.isArray(backup_node_ids)
-      ? backup_node_ids.filter((x: unknown) => typeof x === "string")
-      : [],
+    node_id: typeof node_id === "string" ? node_id : "",
   };
   const err = validateEmby(trimmed);
   if (err) return json(400, { error: err });
@@ -149,17 +144,12 @@ export async function handleUpdateEmby(
   const emby = embys.embys.find((e) => e.name === name);
   if (!emby) return json(404, { error: "emby 不存在" });
 
-  const { backend_url, primary_node_id, backup_node_ids } = req.body ?? {};
+  const { backend_url, node_id } = req.body ?? {};
   if (typeof backend_url === "string" && backend_url.trim()) {
     emby.backend_url = backend_url.trim().replace(/\/$/, "");
   }
-  if (typeof primary_node_id === "string" && primary_node_id) {
-    emby.primary_node_id = primary_node_id;
-  }
-  if (Array.isArray(backup_node_ids)) {
-    emby.backup_node_ids = backup_node_ids.filter(
-      (x: unknown): x is string => typeof x === "string",
-    );
+  if (typeof node_id === "string" && node_id) {
+    emby.node_id = node_id;
   }
   const err = validateEmby(emby);
   if (err) return json(400, { error: err });
@@ -227,13 +217,16 @@ export async function handleImport(req: JsonRequest, env: Env): Promise<Response
 
   const embysKV: EmbysKV = { version: 1, embys: [] };
   for (const e of incomingEmbys) {
+    const incomingNodeId =
+      typeof (e as any).node_id === "string"
+        ? (e as any).node_id
+        : typeof (e as any).primary_node_id === "string"
+          ? (e as any).primary_node_id
+          : "";
     const cand: EmbyRecord = {
       name: (e.name ?? "").toString().trim(),
       backend_url: (e.backend_url ?? "").toString().trim().replace(/\/$/, ""),
-      primary_node_id: (e.primary_node_id ?? "").toString(),
-      backup_node_ids: Array.isArray(e.backup_node_ids)
-        ? e.backup_node_ids.filter((x: unknown): x is string => typeof x === "string")
-        : [],
+      node_id: incomingNodeId.toString(),
       created_at: e.created_at ?? new Date().toISOString(),
     };
     const err = validateEmby(cand);
@@ -318,7 +311,7 @@ function validateEmby(e: Omit<EmbyRecord, "created_at">): string | null {
   } catch {
     return "backend_url 不合法";
   }
-  if (!e.primary_node_id) return "primary_node_id 必填";
+  if (!e.node_id) return "node_id 必填";
   return null;
 }
 
@@ -326,13 +319,8 @@ function checkNodeRefs(
   e: Omit<EmbyRecord, "created_at">,
   nodes: NodesKV,
 ): string | null {
-  if (!nodes.nodes.some((n) => n.id === e.primary_node_id)) {
-    return `primary_node_id '${e.primary_node_id}' 不存在`;
-  }
-  for (const id of e.backup_node_ids) {
-    if (!nodes.nodes.some((n) => n.id === id)) {
-      return `backup_node_id '${id}' 不存在`;
-    }
+  if (!nodes.nodes.some((n) => n.id === e.node_id)) {
+    return `node_id '${e.node_id}' 不存在`;
   }
   return null;
 }

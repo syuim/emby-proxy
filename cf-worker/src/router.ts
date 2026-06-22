@@ -51,22 +51,28 @@ async function chooseNode(
   emby: EmbyRecord,
   nodes: NodeRecord[],
 ): Promise<NodeRecord | null> {
-  const candidates = [emby.primary_node_id, ...emby.backup_node_ids];
   const health = await readHealth(env);
+  const primary = nodes.find((n) => n.id === emby.node_id);
 
-  for (const id of candidates) {
-    const node = nodes.find((n) => n.id === id);
-    if (!node) continue;
-    if (health.nodes[id]?.healthy) {
-      return node;
-    }
+  if (primary && health.nodes[primary.id]?.healthy) {
+    return primary;
   }
 
-  // 全部不健康：兜底 primary，让客户端感知失败比直接 502 强
-  const primary = nodes.find((n) => n.id === emby.primary_node_id);
+  // 主节点不健康：从其他节点中随机挑一个健康的
+  const fallbacks = nodes
+    .filter((n) => n.id !== emby.node_id && health.nodes[n.id]?.healthy);
+  if (fallbacks.length > 0) {
+    const pick = fallbacks[Math.floor(Math.random() * fallbacks.length)]!;
+    console.warn(
+      `node '${emby.node_id}' unhealthy for emby='${emby.name}', picking fallback='${pick.id}'`,
+    );
+    return pick;
+  }
+
+  // 全部不健康：兜底原始节点，让客户端感知失败比直接 502 强
   if (primary) {
     console.warn(
-      `all nodes unhealthy for emby='${emby.name}', falling back to primary='${primary.id}'`,
+      `all nodes unhealthy for emby='${emby.name}', falling back to assigned='${primary.id}'`,
     );
     return primary;
   }
