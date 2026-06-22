@@ -79,6 +79,28 @@ cd proxy-go && go test ./... && go build -o emby-proxy .
 cd cf-worker && npm install && npx tsc --noEmit && npx wrangler dev
 ```
 
+## 自动部署
+
+`cf-worker/` 任何改动 push 到 `main` 会触发 [`.github/workflows/deploy-cf-worker.yml`](.github/workflows/deploy-cf-worker.yml) 自动部署到 Cloudflare。
+
+**前置准备**（首次必须本地手动一次）：
+
+1. `cd cf-worker && npx wrangler login` 浏览器登录
+2. `npx wrangler kv namespace create EMBY_KV` 创建 KV，把 id 填回 `wrangler.toml`
+3. `npx wrangler secret put ADMIN_TOKEN` / `npx wrangler secret put EMBY_SYNC_TOKEN` 写入 secrets
+4. `npx wrangler deploy` 首次部署 + 在 CF 控制台为 worker 绑定自定义域名
+
+**启用 CI 自动部署**：
+
+GitHub 仓库 Settings → Secrets and variables → Actions 加两个 secret：
+
+| Secret | 值 |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | API Token（[创建页面](https://dash.cloudflare.com/profile/api-tokens) → 用 `Edit Cloudflare Workers` 模板） |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账户 ID（dash 右侧栏） |
+
+> ⚠️ KV namespace ID 和 wrangler secrets 不会通过 CI 部署，必须先在本地手动完成。CI 只负责更新代码。
+
 ## 环境变量
 
 ### proxy-go 节点
