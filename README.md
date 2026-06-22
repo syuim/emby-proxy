@@ -106,13 +106,37 @@ GitHub 仓库 Settings → Secrets and variables → Actions 加两个 secret：
 
 > ⚠️ KV namespace ID 和 wrangler secrets 不会通过 CI 部署，必须先在本地手动完成。CI 只负责更新代码。
 
+## Token 共享与鉴权
+
+`EMBY_SYNC_TOKEN` 必须**同时**在 cf-worker 和每个 proxy-go 节点上配置，且**两边的字符串必须完全一致**（byte-for-byte）。
+
+```
+cf-worker (env: EMBY_SYNC_TOKEN)
+    │  POST https://node.example.com/admin/sync
+    │  Authorization: Bearer <EMBY_SYNC_TOKEN>
+    │  Body: {version, proxies:[...]}
+    ↓
+proxy-go (env: EMBY_SYNC_TOKEN)
+    │  checkAuth: 比较 header 中的 token 与自己的 EMBY_SYNC_TOKEN
+    │
+    ├─ 一致 → 200 接受快照，落盘 emby_slave_config.json
+    └─ 不一致 → 401 unauthorized
+```
+
+| 角色 | 用途 |
+|---|---|
+| cf-worker | 出站方，写入推送请求的 `Authorization: Bearer` |
+| proxy-go 节点 | 入站方，校验请求头中的 token 是否与自身环境变量一致 |
+
+`ADMIN_TOKEN` 仅 cf-worker 需要，用于管理 UI 登录，**与 `EMBY_SYNC_TOKEN` 是两个独立的 secret**，不要混用。
+
 ## 环境变量
 
 ### proxy-go 节点
 
 | 变量 | 说明 | 必填 |
 |---|---|---|
-| `EMBY_SYNC_TOKEN` | 与 cf-worker secret 同值 | 是 |
+| `EMBY_SYNC_TOKEN` | 校验 cf-worker 推送鉴权 | 是 |
 | `EMBY_PROXY_PORT` | 监听端口 | 否（默认 8080） |
 | `EMBY_DATA_DIR` | 配置缓存目录 | 否（默认 `/app/data`） |
 
@@ -121,7 +145,7 @@ GitHub 仓库 Settings → Secrets and variables → Actions 加两个 secret：
 | 变量 | 说明 |
 |---|---|
 | `ADMIN_TOKEN` | 管理 UI 登录 |
-| `EMBY_SYNC_TOKEN` | 推节点用，与节点同值 |
+| `EMBY_SYNC_TOKEN` | 推送节点时的 Bearer token |
 
 ## 历史
 
