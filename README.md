@@ -47,7 +47,12 @@ npx wrangler secret put EMBY_SYNC_TOKEN        # 必须与节点同值
 npx wrangler deploy
 ```
 
-在 Cloudflare 控制台为 Worker 绑定自定义域名（emby 入口域名）。
+在 Cloudflare 控制台为 Worker 绑定一个自定义域名（如 `emby.yourdomain.com`）。**同一个域名同时承担两个角色**：
+
+- `https://emby.yourdomain.com/admin` → 管理后台
+- `https://emby.yourdomain.com/<emby_name>/...` → 客户端 emby 入口（被 307 转到健康节点）
+
+`admin / api / health / __health / favicon.ico / robots.txt / .well-known` 已被列为保留字，创建 emby 时不能使用。
 
 ### Step 3: 配置 emby
 
