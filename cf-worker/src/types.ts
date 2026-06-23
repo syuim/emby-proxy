@@ -6,7 +6,6 @@ export interface NodeRecord {
 }
 
 export interface NodesKV {
-  version: number;
   nodes: NodeRecord[];
 }
 

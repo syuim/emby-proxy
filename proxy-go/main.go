@@ -37,9 +37,13 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Health check
+	// Health check — 同时返回当前 applied_version，worker 一次 fetch 拿完
 	mux.HandleFunc("/__health", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
+		state := store.GetState()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":              true,
+			"applied_version": state["version"],
+		})
 	})
 
 	// Admin endpoints

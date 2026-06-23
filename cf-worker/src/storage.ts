@@ -11,7 +11,7 @@ import type {
   NodeHealth,
 } from "./types";
 
-const EMPTY_NODES: NodesKV = { version: 0, nodes: [] };
+const EMPTY_NODES: NodesKV = { nodes: [] };
 const EMPTY_EMBYS: EmbysKV = { version: 0, embys: [] };
 const EMPTY_HEALTH: HealthKV = { updated_at: "", nodes: {} };
 
@@ -64,7 +64,6 @@ export function emptyNodeHealth(): NodeHealth {
 // 纳入比较会让"比较后写"永远判"有变化"，失去省写入的意义。
 
 export function nodesEqual(a: NodesKV, b: NodesKV): boolean {
-  if (a.version !== b.version) return false;
   if (a.nodes.length !== b.nodes.length) return false;
   for (let i = 0; i < a.nodes.length; i++) {
     const an = a.nodes[i];

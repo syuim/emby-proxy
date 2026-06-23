@@ -3,6 +3,8 @@ import {
   HEALTH_PROBE_TIMEOUT_MS,
   NODE_HEALTH_PATH,
   STATUS_PATH,
+  THROTTLE_FAIL_THRESHOLD,
+  THROTTLE_PROBE_INTERVAL_MS,
 } from "./constants";
 import {
   emptyNodeHealth,
@@ -27,6 +29,8 @@ interface ProbeOutcome {
   latency_ms: number | null;
   error: string | null;
   applied_version: number | null;
+  // 失败降频：本周期被跳过，未真实探测
+  throttled?: boolean;
 }
 
 export async function runHealthCycle(
@@ -45,7 +49,9 @@ export async function runHealthCycle(
   }
 
   const outcomes = await Promise.all(
-    nodesKV.nodes.map((n) => probeNode(n, env.EMBY_SYNC_TOKEN)),
+    nodesKV.nodes.map((n) =>
+      probeNode(n, env.EMBY_SYNC_TOKEN, prevHealth.nodes[n.id] ?? emptyNodeHealth()),
+    ),
   );
 
   const newHealth: HealthKV = {
@@ -58,7 +64,7 @@ export async function runHealthCycle(
   }
   await writeHealth(env, newHealth);
 
-  // 补齐：节点 applied_version 与 KV embys.version 不一致时异步补推
+  // 补齐：节点 applied_version 与 KV embys.version 不一致（或未知）时异步补推
   ctx.waitUntil(
     backfillOutdatedNodes(env, embysKV, nodesKV.nodes, outcomes, newHealth),
   );
@@ -67,7 +73,24 @@ export async function runHealthCycle(
 async function probeNode(
   node: NodeRecord,
   syncToken: string,
+  prev: NodeHealth,
 ): Promise<ProbeOutcome> {
+  // 失败降频：连续失败次数足够多时，只在窗口外才真正探测
+  if (
+    prev.consecutive_fails >= THROTTLE_FAIL_THRESHOLD &&
+    prev.last_check !== null &&
+    Date.now() - new Date(prev.last_check).getTime() < THROTTLE_PROBE_INTERVAL_MS
+  ) {
+    return {
+      node,
+      ok: false,
+      latency_ms: null,
+      error: null,
+      applied_version: null,
+      throttled: true,
+    };
+  }
+
   const base = node.public_url.replace(/\/$/, "");
   const start = Date.now();
   const controller = new AbortController();
@@ -85,26 +108,42 @@ async function probeNode(
         applied_version: null,
       };
     }
-    const latency = Date.now() - start;
 
-    // 顺带拉一下 status 拿 applied_version（失败不算节点不健康，仅 version 缺失）
+    // 新版本节点：/__health 直接返回 {ok, applied_version}
+    // 老版本节点：返回文本 "ok"，需 fallback 到 /admin/status
     let appliedVersion: number | null = null;
+    let parsedJson = false;
     try {
-      const statusResp = await fetch(base + STATUS_PATH, {
-        headers: { Authorization: `Bearer ${syncToken}` },
-        signal: controller.signal,
-      });
-      if (statusResp.ok) {
-        const data = (await statusResp.json()) as { version?: number };
-        appliedVersion = typeof data.version === "number" ? data.version : null;
+      const contentType = resp.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        const data = (await resp.json()) as { applied_version?: unknown };
+        if (typeof data.applied_version === "number") {
+          appliedVersion = data.applied_version;
+        }
+        parsedJson = true;
       }
     } catch {
-      // ignore
+      // 解析失败按非 JSON 处理
     }
+    if (!parsedJson) {
+      try {
+        const statusResp = await fetch(base + STATUS_PATH, {
+          headers: { Authorization: `Bearer ${syncToken}` },
+          signal: controller.signal,
+        });
+        if (statusResp.ok) {
+          const data = (await statusResp.json()) as { version?: number };
+          appliedVersion = typeof data.version === "number" ? data.version : null;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     return {
       node,
       ok: true,
-      latency_ms: latency,
+      latency_ms: Date.now() - start,
       error: null,
       applied_version: appliedVersion,
     };
@@ -126,8 +165,10 @@ async function probeNode(
  * 慢降级、快恢复：
  * - 连续失败 ≥ FAIL_THRESHOLD 才标 unhealthy
  * - 任意一次成功立即标 healthy
+ * - throttled 周期：prev 原样返回，不更新 last_check
  */
 function mergeHealth(prev: NodeHealth, outcome: ProbeOutcome): NodeHealth {
+  if (outcome.throttled) return prev;
   const now = new Date().toISOString();
   if (outcome.ok) {
     return {
@@ -161,7 +202,8 @@ async function backfillOutdatedNodes(
   if (targetVersion === 0) return;
 
   const stale = outcomes.filter(
-    (o) => o.ok && o.applied_version !== null && o.applied_version !== targetVersion,
+    // 节点健康但 version 未知（status 拉取失败）或确实过期，均触发补推
+    (o) => o.ok && (o.applied_version === null || o.applied_version !== targetVersion),
   );
   if (stale.length === 0) return;
 

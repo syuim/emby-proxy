@@ -49,7 +49,6 @@ export async function handleAddNode(req: JsonRequest, env: Env): Promise<Respons
     public_url: trimmed.public_url.replace(/\/$/, ""),
     created_at: new Date().toISOString(),
   };
-  nodes.version += 1;
   nodes.nodes.push(newNode);
   await writeNodes(env, nodes);
   return json(201, { ok: true, node: newNode });
@@ -89,7 +88,6 @@ export async function handleUpdateNode(
     }
   }
   if (!changed) return json(200, { ok: true, node, skipped: true });
-  nodes.version += 1;
   await writeNodes(env, nodes);
   return json(200, { ok: true, node });
 }
@@ -107,7 +105,6 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
   if (nodes.nodes.length === before) {
     return json(404, { error: "节点不存在" });
   }
-  nodes.version += 1;
   await writeNodes(env, nodes);
   return json(200, { ok: true });
 }
