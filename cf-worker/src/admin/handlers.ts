@@ -64,13 +64,17 @@ export async function handleUpdateNode(
   const node = nodes.nodes.find((n) => n.id === id);
   if (!node) return json(404, { error: "节点不存在" });
 
+  let changed = false;
   const { name, public_url } = req.body ?? {};
   if (typeof name === "string" && name.trim()) {
     const v = name.trim();
     if (nodes.nodes.some((n) => n.id !== id && n.name === v)) {
       return json(400, { error: `节点名 '${v}' 已被占用` });
     }
-    node.name = v;
+    if (v !== node.name) {
+      node.name = v;
+      changed = true;
+    }
   }
   if (typeof public_url === "string" && public_url.trim()) {
     const v = public_url.trim().replace(/\/$/, "");
@@ -79,8 +83,12 @@ export async function handleUpdateNode(
     if (nodes.nodes.some((n) => n.id !== id && n.public_url === v)) {
       return json(400, { error: `URL '${v}' 已被占用` });
     }
-    node.public_url = v;
+    if (v !== node.public_url) {
+      node.public_url = v;
+      changed = true;
+    }
   }
+  if (!changed) return json(200, { ok: true, node, skipped: true });
   nodes.version += 1;
   await writeNodes(env, nodes);
   return json(200, { ok: true, node });
@@ -144,18 +152,27 @@ export async function handleUpdateEmby(
   const emby = embys.embys.find((e) => e.name === name);
   if (!emby) return json(404, { error: "emby 不存在" });
 
+  let changed = false;
   const { backend_url, node_id } = req.body ?? {};
   if (typeof backend_url === "string" && backend_url.trim()) {
-    emby.backend_url = backend_url.trim().replace(/\/$/, "");
+    const v = backend_url.trim().replace(/\/$/, "");
+    if (v !== emby.backend_url) {
+      emby.backend_url = v;
+      changed = true;
+    }
   }
   if (typeof node_id === "string" && node_id) {
-    emby.node_id = node_id;
+    if (node_id !== emby.node_id) {
+      emby.node_id = node_id;
+      changed = true;
+    }
   }
   const err = validateEmby(emby);
   if (err) return json(400, { error: err });
   const refErr = checkNodeRefs(emby, nodes);
   if (refErr) return json(400, { error: refErr });
 
+  if (!changed) return json(200, { ok: true, emby, skipped: true });
   embys.version += 1;
   await writeEmbys(env, embys);
   const push = await fanoutPush(env, embys, nodes, "update-emby");

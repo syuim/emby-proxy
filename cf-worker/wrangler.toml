@@ -9,9 +9,9 @@ account_id = "9a2c5f84e3346b4d2310792e4f759881"
 binding = "EMBY_KV"
 id = "76e2d1f5f2404afd90182676d33f4f94"
 
-# 健康检测：每 1 分钟跑一次（Workers Free 最小间隔）
+# 健康检测：每 3 分钟跑一次
 [triggers]
-crons = ["*/1 * * * *"]
+crons = ["*/3 * * * *"]
 
 # Secrets（用 `wrangler secret put <NAME>` 写入，不要写在这里）：
 #   ADMIN_TOKEN       管理 UI 登录与 import 接口

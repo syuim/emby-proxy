@@ -31,14 +31,20 @@ export async function readHealth(env: Env): Promise<HealthKV> {
 }
 
 export async function writeNodes(env: Env, value: NodesKV): Promise<void> {
+  const prev = await readNodes(env);
+  if (nodesEqual(prev, value)) return;
   await env.EMBY_KV.put(KV_KEY_NODES, JSON.stringify(value));
 }
 
 export async function writeEmbys(env: Env, value: EmbysKV): Promise<void> {
+  const prev = await readEmbys(env);
+  if (embysEqual(prev, value)) return;
   await env.EMBY_KV.put(KV_KEY_EMBYS, JSON.stringify(value));
 }
 
 export async function writeHealth(env: Env, value: HealthKV): Promise<void> {
+  const prev = await readHealth(env);
+  if (healthEqual(prev, value)) return;
   await env.EMBY_KV.put(KV_KEY_HEALTH, JSON.stringify(value));
 }
 
@@ -51,4 +57,68 @@ export function emptyNodeHealth(): NodeHealth {
     applied_version: null,
     last_sync_error: null,
   };
+}
+
+// ---------- 比较函数 ----------
+// 注意：last_check 与 updated_at 不参与比较，它们每次调用都会刷新，
+// 纳入比较会让"比较后写"永远判"有变化"，失去省写入的意义。
+
+export function nodesEqual(a: NodesKV, b: NodesKV): boolean {
+  if (a.version !== b.version) return false;
+  if (a.nodes.length !== b.nodes.length) return false;
+  for (let i = 0; i < a.nodes.length; i++) {
+    const an = a.nodes[i];
+    const bn = b.nodes[i];
+    if (
+      an.id !== bn.id ||
+      an.name !== bn.name ||
+      an.public_url !== bn.public_url ||
+      an.created_at !== bn.created_at
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function embysEqual(a: EmbysKV, b: EmbysKV): boolean {
+  if (a.version !== b.version) return false;
+  if (a.embys.length !== b.embys.length) return false;
+  for (let i = 0; i < a.embys.length; i++) {
+    const ae = a.embys[i];
+    const be = b.embys[i];
+    if (
+      ae.name !== be.name ||
+      ae.backend_url !== be.backend_url ||
+      ae.node_id !== be.node_id ||
+      ae.created_at !== be.created_at
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function healthEqual(a: HealthKV, b: HealthKV): boolean {
+  const aKeys = Object.keys(a.nodes);
+  const bKeys = Object.keys(b.nodes);
+  if (aKeys.length !== bKeys.length) return false;
+  const aSet = new Set(aKeys);
+  for (const k of bKeys) {
+    if (!aSet.has(k)) return false;
+  }
+  for (const k of aKeys) {
+    const an = a.nodes[k];
+    const bn = b.nodes[k];
+    if (
+      an.healthy !== bn.healthy ||
+      an.consecutive_fails !== bn.consecutive_fails ||
+      an.last_latency_ms !== bn.last_latency_ms ||
+      an.applied_version !== bn.applied_version ||
+      an.last_sync_error !== bn.last_sync_error
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
