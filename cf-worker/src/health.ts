@@ -222,14 +222,15 @@ async function backfillOutdatedNodes(
 
 export async function mergeSyncResults(
   env: Env,
-  baseHealth: HealthKV,
+  _baseHealth: HealthKV,
   results: PushResult[],
   _nodes: NodeRecord[],
 ): Promise<void> {
   if (results.length === 0) return;
+  const latest = await readHealth(env);
   const next: HealthKV = {
     updated_at: new Date().toISOString(),
-    nodes: { ...baseHealth.nodes },
+    nodes: { ...latest.nodes },
   };
   for (const r of results) {
     const prev = next.nodes[r.node_id] ?? emptyNodeHealth();

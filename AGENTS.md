@@ -29,13 +29,17 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 - `path_prefix` 是历史名字，对应 worker 内部 `emby_name`，**字段名不能动**
 - 鉴权：`Authorization: Bearer $EMBY_SYNC_TOKEN`
 
-## 保留路径（不能作为 emby_name）
+## 保留路径与命名规则
 
-`admin / api / health / __health / favicon.ico / robots.txt / .well-known` —— router/admin 校验都拒了，加新 emby 或写测试时避开。
+不能作为 `emby_name` 的保留字：`admin / api / health / __health / favicon.ico / robots.txt / .well-known / _`。
+
+`emby_name` 还需满足正则 `^[a-zA-Z0-9_-]{1,32}$`，加新 emby 或写测试时避开上述约束。
 
 ## 故障转移行为
 
-emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健康的 → 全不健康兜底原 `node_id`（不返 503）。健康检测：cron 每 1 分钟探活，连续 2 次失败降级 / 1 次成功恢复。
+emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健康的 → 全不健康兜底原 `node_id`（不返 503）。健康检测：cron 每 3 分钟探活，连续 2 次失败降级 / 1 次成功恢复。
+
+探活降频：节点连续失败 ≥5 次后，9 分钟内只真实探测一次，避免反复打已知死节点。探测成功后若节点 `applied_version` 落后 KV，会异步补推一次配置。
 
 ## 必需环境变量
 
@@ -44,8 +48,8 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 | 变量 | 说明 | 必填 |
 |---|---|---|
 | `EMBY_SYNC_TOKEN` | 与 cf-worker secret 同值，校验推送鉴权 | 是 |
-| `EMBY_PROXY_PORT` | 监听端口 | 否（默认 8080） |
-| `EMBY_DATA_DIR` | 配置缓存目录 | 否（默认 `/app/data`） |
+| `EMBY_PROXY_PORT` | 监听端口 | 否（默认 `8080`） |
+| `EMBY_DATA_DIR` | 配置缓存目录 | 否（Go 默认 `./data`；Docker/compose 使用 `/app/data`） |
 
 ### cf-worker（wrangler secrets）
 
@@ -57,6 +61,10 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 - `wrangler.toml` 已锁定 `account_id`（Suyu 账号），CI 非交互模式必需
 
 本地 dev：`cf-worker/.dev.vars`（已 gitignore），与生产 secrets 完全独立。
+
+## 图片缓存
+
+客户端请求路径匹配 `/Images/` 且为 GET、无 `Range` 头时，Worker 不走 307，而是直接代理上游并写入 Cloudflare Cache，缓存 7 天（stale-while-revalidate 1 天）。鉴权参数（`api_key`、`X-Emby-Token`、`X-MediaBrowser-Token`）在缓存 key 中被剔除。
 
 ## 部署
 

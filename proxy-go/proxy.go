@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -57,7 +58,14 @@ func NewProxyHandler(store *Store) *ProxyHandler {
 	return &ProxyHandler{
 		store: store,
 		httpClient: &http.Client{
-			Timeout: 0, // no overall timeout; let the backend control timing
+			Timeout: 0, // no overall timeout; streaming must not be cut
+			Transport: &http.Transport{
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 30 * time.Second,
+				IdleConnTimeout:       120 * time.Second,
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   20,
+			},
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse // we handle redirects manually
 			},
@@ -131,7 +139,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			bodyReader = bytes.NewReader(bodyBytes)
 		}
 
-		req, err := http.NewRequest(currentMethod, currentURL, bodyReader)
+		req, err := http.NewRequestWithContext(r.Context(), currentMethod, currentURL, bodyReader)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Bad Gateway: %v", err), http.StatusBadGateway)
 			return
@@ -153,6 +161,10 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		resp, err := ph.httpClient.Do(req)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				log.Printf("client disconnected: %s %s", currentMethod, shortenURL(currentURL))
+				return
+			}
 			log.Printf("upstream error %s %s: %v", currentMethod, shortenURL(currentURL), err)
 			http.Error(w, fmt.Sprintf("Bad Gateway: %v", err), http.StatusBadGateway)
 			return
