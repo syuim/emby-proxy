@@ -237,5 +237,5 @@ export async function mergeSyncResults(
       last_sync_error: r.status === "ok" ? null : (r.error ?? "sync error"),
     };
   }
-  await writeHealth(env, next, baseHealth);
+  await writeHealth(env, next, latest);
 }
