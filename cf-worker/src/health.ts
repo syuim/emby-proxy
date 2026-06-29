@@ -62,11 +62,11 @@ export async function runHealthCycle(
     const prev = prevHealth.nodes[o.node.id] ?? emptyNodeHealth();
     newHealth.nodes[o.node.id] = mergeHealth(prev, o);
   }
-  await writeHealth(env, newHealth);
+  await writeHealth(env, newHealth, prevHealth);
 
   // 补齐：节点 applied_version 与 KV embys.version 不一致（或未知）时异步补推
   ctx.waitUntil(
-    backfillOutdatedNodes(env, embysKV, nodesKV.nodes, outcomes, newHealth),
+    backfillOutdatedNodes(env, embysKV, outcomes, newHealth),
   );
 }
 
@@ -194,7 +194,6 @@ function mergeHealth(prev: NodeHealth, outcome: ProbeOutcome): NodeHealth {
 async function backfillOutdatedNodes(
   env: Env,
   embysKV: EmbysKV,
-  nodes: NodeRecord[],
   outcomes: ProbeOutcome[],
   health: HealthKV,
 ): Promise<void> {
@@ -217,14 +216,13 @@ async function backfillOutdatedNodes(
     ),
   );
   // 把推送结果写回 health.last_sync_error
-  await mergeSyncResults(env, health, results, nodes);
+  await mergeSyncResults(env, health, results);
 }
 
 export async function mergeSyncResults(
   env: Env,
   _baseHealth: HealthKV,
   results: PushResult[],
-  _nodes: NodeRecord[],
 ): Promise<void> {
   if (results.length === 0) return;
   const latest = await readHealth(env);
@@ -239,5 +237,5 @@ export async function mergeSyncResults(
       last_sync_error: r.status === "ok" ? null : (r.error ?? "sync error"),
     };
   }
-  await writeHealth(env, next);
+  await writeHealth(env, next, baseHealth);
 }

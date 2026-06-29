@@ -61,7 +61,7 @@ npx wrangler deploy
 
 1. **Nodes 页**：添加节点（name + public_url），同表展示健康/延迟/applied version/同步错误，可手动重推
 2. **Embys 页**：为每个 emby 实例填 emby_name + backend_url + 节点（单选）
-3. 等 1 分钟看 cron 探活；不健康节点会被路由层随机切到其他健康节点
+3. 等 3 分钟看 cron 探活；不健康节点会被路由层随机切到其他健康节点
 
 详见 `cf-worker/README.md`。
 
@@ -72,7 +72,7 @@ npx wrangler deploy
 | 跳转码 | 307 | 保留 method+body，Emby POST API 不丢 |
 | 节点同步 | 全量推所有节点 | 节点对等，故障转移即时生效 |
 | 故障转移 | 指定 node 不健康 → 其他节点中随机选健康的 | 不再维护主/备节点列表，配置最简 |
-| 健康检测 | cron 每 1min + 连续 2 次失败降级 / 1 次成功恢复 | 慢降级、快恢复 |
+| 健康检测 | cron 每 3min + 连续 2 次失败降级 / 1 次成功恢复 | 慢降级、快恢复 |
 | 全部不健康 | fallback 到 emby 原始 node_id（不返 503） | 让客户端自己感知失败 |
 | 推送协议 | `{version, proxies:[{path_prefix, backend_url}]}` | 沿用旧 schema，向后兼容 |
 

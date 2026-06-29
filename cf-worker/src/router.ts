@@ -1,16 +1,8 @@
-import { RESERVED_NAMES } from "./constants";
+import { RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
 import { readEmbys, readHealth, readNodes } from "./storage";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
 
-const IMAGE_CACHE_MAX_AGE = 7 * 24 * 60 * 60;
-const IMAGE_CACHE_SWR = 24 * 60 * 60;
-const STRIP_AUTH_PARAMS = ["api_key", "X-Emby-Token", "X-MediaBrowser-Token"];
-const FORWARD_REQ_HEADERS = new Set([
-  "accept",
-  "accept-encoding",
-  "accept-language",
-  "user-agent",
-]);
+
 
 export async function handleClientRequest(
   request: Request,

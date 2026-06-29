@@ -30,3 +30,14 @@ export const RESERVED_NAMES = new Set([
 
 export const ADMIN_COOKIE = "admin_token";
 export const ADMIN_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+
+// Image proxy constants
+export const IMAGE_CACHE_MAX_AGE = 7 * 24 * 60 * 60;
+export const IMAGE_CACHE_SWR = 24 * 60 * 60;
+export const STRIP_AUTH_PARAMS = ["api_key", "X-Emby-Token", "X-MediaBrowser-Token"];
+export const FORWARD_REQ_HEADERS = new Set([
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "user-agent",
+]);

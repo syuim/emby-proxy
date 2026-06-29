@@ -7,8 +7,6 @@ This file provides guidance to the AI agent when working with code in this repos
 - `cf-worker/`（TypeScript / CF Worker）：客户端入口、管理 UI、307 路由调度、健康检测、配置 fan-out
 - `proxy-go/`（Go 1.22）：接收 cf-worker 推送的 emby 配置，反代 `/<emby_name>/...` 到真 Emby 后端
 
-由 [tg-toolbox](https://github.com/syuim/tg-toolbox) 拆分而来。完整介绍 + 部署见 `README.md` 和 `cf-worker/README.md`。
-
 ## 改完代码必须跑
 
 ```bash
@@ -68,24 +66,15 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 
 ## 部署
 
-代码仓库：`git@github.com:syuim/emby-proxy.git`
+- **CF Worker**：`cf-worker/**` push 到 `main` 自动触发 GitHub Actions
+- **Go 节点**：详见 `ops` agent 机器清单。以 `dash` 为例：
 
-| 角色 | Host | 部署目录 | 部署方式 |
-|---|---|---|---|
-| Emby 反代节点 | `dash.127315.xyz:22222` (root) | `/root/docker/emby-proxy` | SSH 拉取重建 |
-| CF Worker 控制面 | Cloudflare 边缘 | — | `cf-worker/**` push 到 `main` 自动触发 `.github/workflows/deploy-cf-worker.yml` |
+  ```bash
+  ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz \
+    "cd /root/docker/emby-proxy && git pull && cd proxy-go && docker compose build && docker compose up -d"
+  ```
 
-### proxy-go 节点更新（push origin/main 后）
-
-```bash
-ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz \
-  "cd /root/docker/emby-proxy && git pull && cd proxy-go && docker compose build && docker compose up -d"
-```
-
-> dash 远端 `~/.zshrc` 已 export `EMBY_SYNC_TOKEN`，远程通过 `bash -lc` 加载即可继承。
-> dash 同时跑 tg-toolbox bot（`/root/docker/bot`）和 emby-proxy（`/root/docker/emby-proxy`），两个 compose 互不影响。
-
-健康验证：`curl http://dash.127315.xyz:8080/__health` → `ok`。
+  健康验证：`curl http://dash.127315.xyz:8080/__health`
 
 ## 提交信息
 
@@ -100,6 +89,6 @@ ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz \
 
 | # | 目标 | 命令 |
 |---|---|---|
-| 1 | 节点日志 | `ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz 'docker logs --tail 100 emby-proxy-emby-proxy-1'` |
+| 1 | 节点日志（dash） | `ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz 'docker logs --tail 100 emby-proxy-emby-proxy-1'` |
 | 2 | Worker 实时日志 | `cd cf-worker && npx wrangler tail --format pretty` |
 | 3 | KV 内容 | `cd cf-worker && npx wrangler kv key list --binding=EMBY_KV` |

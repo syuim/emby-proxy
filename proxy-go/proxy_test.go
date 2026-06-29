@@ -395,3 +395,140 @@ func TestFilterRequestHeaders(t *testing.T) {
 		t.Fatal("CF-Connecting-IP should be stripped")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// POST body passthrough
+// ---------------------------------------------------------------------------
+
+func TestPostBodyPassthrough(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != "request-body" {
+			t.Errorf("expected 'request-body', got %q", body)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "ok")
+	}))
+	defer backend.Close()
+
+	ph, _ := newTestSetup(backend.URL)
+	req := httptest.NewRequest(http.MethodPost, "/media/test", strings.NewReader("request-body"))
+	rec := httptest.NewRecorder()
+	ph.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("expected 'ok', got %s", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 303 redirect — POST → GET
+// ---------------------------------------------------------------------------
+
+func TestPostFollows303Redirect(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.Header().Set("Location", "/done")
+			w.WriteHeader(http.StatusSeeOther)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "get-ok")
+	}))
+	defer backend.Close()
+
+	ph, _ := newTestSetup(backend.URL)
+	req := httptest.NewRequest(http.MethodPost, "/media/test", nil)
+	rec := httptest.NewRecorder()
+	ph.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if string(body) != "get-ok" {
+		t.Fatalf("expected 'get-ok', got %s", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Request body limit
+// ---------------------------------------------------------------------------
+
+func TestRequestBodyLimit(t *testing.T) {
+	store := NewStore("")
+	store.ApplySnapshot(1, []ProxyEntry{{PathPrefix: "media", BackendURL: "http://127.0.0.1:1"}})
+	ph := NewProxyHandler(store)
+
+	// Send a body larger than maxRequestBodySize
+	huge := strings.Repeat("x", maxRequestBodySize+1)
+	req := httptest.NewRequest(http.MethodPost, "/media/test", strings.NewReader(huge))
+	rec := httptest.NewRecorder()
+	ph.ServeHTTP(rec, req)
+	resp := rec.Result()
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Response header filtering (Set-Cookie sanitization)
+// ---------------------------------------------------------------------------
+
+func TestFilterResponseHeadersStripsDomain(t *testing.T) {
+	src := http.Header{}
+	src.Set("Content-Type", "application/json")
+	src.Set("Set-Cookie", "session=abc; Domain=.evil.com; HttpOnly")
+	src.Set("X-Custom", "keep")
+
+	filtered := filterResponseHeaders(src)
+	if filtered.Get("Content-Type") != "application/json" {
+		t.Fatal("Content-Type should be kept")
+	}
+	if filtered.Get("X-Custom") != "keep" {
+		t.Fatal("X-Custom should be kept")
+	}
+	cookie := filtered.Get("Set-Cookie")
+	if strings.Contains(cookie, "Domain=") {
+		t.Fatalf("Set-Cookie should not contain Domain: %s", cookie)
+	}
+	if !strings.Contains(cookie, "session=abc") {
+		t.Fatalf("Set-Cookie should contain session=abc: %s", cookie)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isDangerousBackendURL
+// ---------------------------------------------------------------------------
+
+func TestIsDangerousBackendURL(t *testing.T) {
+	tests := []struct {
+		url    string
+		safe   bool // safe = not dangerous
+	}{
+		{"http://192.168.1.1:8096", true},     // private, allowed as backend
+		{"http://10.0.0.1:8096", true},        // private, allowed as backend
+		{"http://127.0.0.1:8096", true},       // loopback, allowed as backend
+		{"http://169.254.169.254/latest/", false}, // link-local, blocked
+		{"http://[::1]:8096", true},           // loopback IPv6, allowed
+		{"http://1.1.1.1:8096", true},         // public, allowed
+		{"http://0.0.0.0:8096", false},        // unspecified, blocked
+		{"not-a-url", false},                  // invalid, blocked
+	}
+	for _, tt := range tests {
+		got := !isDangerousBackendURL(tt.url)
+		if got != tt.safe {
+			t.Errorf("isDangerousBackendURL(%q) = safe=%v, want safe=%v", tt.url, got, tt.safe)
+		}
+	}
+}

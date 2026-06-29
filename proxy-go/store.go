@@ -7,11 +7,39 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
+
+const dnsCacheTTL = 10 * time.Minute
+
+type dnsCacheEntry struct {
+	ips       []net.IP
+	expiresAt time.Time
+}
+
+var dnsCache sync.Map
+
+// cachedLookupIP resolves host to IPs with a TTL cache.
+func cachedLookupIP(host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	now := time.Now()
+	if v, ok := dnsCache.Load(host); ok {
+		entry := v.(dnsCacheEntry)
+		if now.Before(entry.expiresAt) {
+			return entry.ips, nil
+		}
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil, err
+	}
+	dnsCache.Store(host, dnsCacheEntry{ips: ips, expiresAt: now.Add(dnsCacheTTL)})
+	return ips, nil
+}
+
 
 type ProxyEntry struct {
 	PathPrefix string `json:"path_prefix"`
@@ -190,13 +218,9 @@ func isDangerousBackendURL(rawURL string) bool {
 	if host == "169.254.169.254" {
 		return true
 	}
-	ips, err := net.LookupIP(host)
+	ips, err := cachedLookupIP(host)
 	if err != nil {
-		ip := net.ParseIP(host)
-		if ip == nil {
-			return false
-		}
-		ips = []net.IP{ip}
+		return false
 	}
 	for _, ip := range ips {
 		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
@@ -206,35 +230,3 @@ func isDangerousBackendURL(rawURL string) bool {
 	return false
 }
 
-// splitPrefix splits "/prefix/rest" → ("prefix", "/rest"). Returns ("", "") if no prefix.
-func splitPrefix(path string) (string, string) {
-	if !strings.HasPrefix(path, "/") || len(path) < 2 {
-		return "", ""
-	}
-	rest := path[1:]
-	idx := strings.Index(rest, "/")
-	if idx == -1 {
-		return rest, "/"
-	}
-	return rest[:idx], rest[idx:]
-}
-
-// normalizeOrigin returns (lowercase_hostname, effective_port) for origin comparison.
-// Normalizes implicit default ports (80 for http, 443 for https).
-func normalizeOrigin(rawURL string) (string, int, bool) {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Hostname() == "" {
-		return "", 0, false
-	}
-	host := strings.ToLower(u.Hostname())
-	portStr := u.Port()
-	if portStr == "" {
-		if u.Scheme == "https" {
-			portStr = "443"
-		} else {
-			portStr = "80"
-		}
-	}
-	portNum, _ := strconv.Atoi(portStr)
-	return host, portNum, true
-}

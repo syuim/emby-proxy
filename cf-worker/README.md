@@ -3,7 +3,7 @@
 CF Worker，承担 emby 反代的：
 1. **路由调度**：客户端访问 `https://入口域名/<emby_name>/...` → 查 KV → 选健康节点 → **307** 转发
 2. **管理 UI**：`/admin` 单页，配置 nodes / embys / 故障转移
-3. **健康检测**：cron 每 1 分钟探活节点 `/__health`
+3. **健康检测**：cron 每 3 分钟探活节点 `/__health`
 4. **配置同步**：写 KV 后 fan-out 推到所有节点的 `/admin/sync`
 
 ## 架构
@@ -64,7 +64,7 @@ npx wrangler deploy
 
 1. **Nodes 页**：添加你的 Go 节点（name + public_url，如 `https://us.example.com`）。同表展示健康/延迟/applied version/同步错误，可手动重推
 2. **Embys 页**：为每个 emby 实例填 emby_name、backend_url、节点（单选）
-3. 等 1 分钟看 cron 探活；指定节点不健康时路由层会随机切到其他健康节点
+3. 等 3 分钟看 cron 探活；指定节点不健康时路由层会随机切到其他健康节点
 
 ### 批量导入
 
@@ -108,7 +108,7 @@ Worker 推到节点的 `/admin/sync` payload **完全沿用旧 schema**（向后
 | 跳转码 | 307 | 保留 method+body，Emby POST API 不丢 |
 | 节点同步 | 全量推所有节点 | 节点对等，故障转移即时生效 |
 | 故障转移 | 指定 node 不健康 → 其他节点中随机选健康的 | 不再维护主/备节点列表 |
-| 健康检测 | cron 每 1min + 连续 2 次失败降级 / 1 次成功恢复 | 慢降级、快恢复 |
+| 健康检测 | cron 每 3min + 连续 2 次失败降级 / 1 次成功恢复 | 慢降级、快恢复 |
 | 全部不健康 | fallback 到 emby 原始 node_id（不返 503） | 让客户端自己感知失败 |
 | 管理认证 | ADMIN_TOKEN + cookie/Bearer | UI cookie HttpOnly+Secure |
 

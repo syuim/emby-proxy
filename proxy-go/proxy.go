@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"strconv"
 	"time"
 )
 
@@ -46,6 +47,24 @@ func corsHeaders() http.Header {
 	h.Set("Access-Control-Allow-Headers", "*")
 	h.Set("Access-Control-Max-Age", "86400")
 	return h
+}
+
+// writeFilteredResponseHeaders copies filtered response headers to w and
+// ensures CORS headers are present. Shared by final-response and
+// redirect-without-Location paths.
+func writeFilteredResponseHeaders(w http.ResponseWriter, resp *http.Response) {
+	for k, vv := range filterResponseHeaders(resp.Header) {
+		for i, v := range vv {
+			if i == 0 {
+				w.Header().Set(k, v)
+			} else {
+				w.Header().Add(k, v)
+			}
+		}
+	}
+	if w.Header().Get("Access-Control-Allow-Origin") == "" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
 }
 
 // ProxyHandler implements the reverse proxy with redirect following and SSRF guard.
@@ -172,31 +191,17 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if !redirectStatuses[resp.StatusCode] {
 			// Final response — break out of redirect loop
-			defer resp.Body.Close()
-
-			// Filter response headers
-			filteredHeaders := filterResponseHeaders(resp.Header)
-			for k, vv := range filteredHeaders {
-				for i, v := range vv {
-					if i == 0 {
-						w.Header().Set(k, v)
-					} else {
-						w.Header().Add(k, v)
-					}
-				}
-			}
-			if w.Header().Get("Access-Control-Allow-Origin") == "" {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-			}
-
+			writeFilteredResponseHeaders(w, resp)
 			w.WriteHeader(resp.StatusCode)
 
 			var n int64
+			var bodyErr error
 			if resp.Body != nil {
-				n, err = io.Copy(w, resp.Body)
-				if err != nil {
-					log.Printf("stream error: %v", err)
+				n, bodyErr = io.Copy(w, resp.Body)
+				if bodyErr != nil {
+					log.Printf("stream error: %v", bodyErr)
 				}
+				resp.Body.Close()
 			}
 
 			elapsed := time.Since(started).Milliseconds()
@@ -217,17 +222,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if loc == "" {
 			resp.Body.Close()
 			log.Printf("redirect %d without Location header at %s", resp.StatusCode, shortenURL(currentURL))
-			// Treat as final response
-			filteredHeaders := filterResponseHeaders(resp.Header)
-			for k, vv := range filteredHeaders {
-				for i, v := range vv {
-					if i == 0 {
-						w.Header().Set(k, v)
-					} else {
-						w.Header().Add(k, v)
-					}
-				}
-			}
+			writeFilteredResponseHeaders(w, resp)
 			w.WriteHeader(resp.StatusCode)
 			return
 		}
@@ -240,7 +235,13 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Resolve relative URLs
 		if !nextURL.IsAbs() {
-			base, _ := url.Parse(currentURL)
+			base, err := url.Parse(currentURL)
+			if err != nil {
+				resp.Body.Close()
+				log.Printf("redirect resolve error: %v", err)
+				http.Error(w, "Bad Gateway: invalid redirect", http.StatusBadGateway)
+				return
+			}
 			nextURL = base.ResolveReference(nextURL)
 		}
 		nextURLStr := nextURL.String()
@@ -323,21 +324,19 @@ func isMaxBytesError(err error) bool {
 	return errors.As(err, &maxErr)
 }
 
-func shortenURL(u string, maxLen ...int) string {
-	max := 80
-	if len(maxLen) > 0 {
-		max = maxLen[0]
-	}
+const shortenURLLimit = 80
+
+func shortenURL(u string) string {
 	parsed, err := url.Parse(u)
 	if err != nil {
-		if len(u) > max {
-			return u[:max-3] + "..."
+		if len(u) > shortenURLLimit {
+			return u[:shortenURLLimit-3] + "..."
 		}
 		return u
 	}
 	out := parsed.Host + parsed.Path
-	if len(out) > max {
-		out = out[:max-3] + "..."
+	if len(out) > shortenURLLimit {
+		out = out[:shortenURLLimit-3] + "..."
 	}
 	return out
 }
@@ -401,4 +400,37 @@ func isPrivateOrReserved(ip net.IP) bool {
 		return true
 	}
 	return false
+}
+
+// splitPrefix splits "/prefix/rest" → ("prefix", "/rest"). Returns ("", "") if no prefix.
+func splitPrefix(path string) (string, string) {
+	if !strings.HasPrefix(path, "/") || len(path) < 2 {
+		return "", ""
+	}
+	rest := path[1:]
+	idx := strings.Index(rest, "/")
+	if idx == -1 {
+		return rest, "/"
+	}
+	return rest[:idx], rest[idx:]
+}
+
+// normalizeOrigin returns (lowercase_hostname, effective_port) for origin comparison.
+// Normalizes implicit default ports (80 for http, 443 for https).
+func normalizeOrigin(rawURL string) (string, int, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return "", 0, false
+	}
+	host := strings.ToLower(u.Hostname())
+	portStr := u.Port()
+	if portStr == "" {
+		if u.Scheme == "https" {
+			portStr = "443"
+		} else {
+			portStr = "80"
+		}
+	}
+	portNum, _ := strconv.Atoi(portStr)
+	return host, portNum, true
 }

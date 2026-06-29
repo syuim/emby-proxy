@@ -220,7 +220,7 @@ async function fanoutPush(
     trigger,
   );
   const baseHealth = await readHealth(env);
-  await mergeSyncResults(env, baseHealth, results, nodes.nodes);
+  await mergeSyncResults(env, baseHealth, results);
   return results;
 }
 

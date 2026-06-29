@@ -30,20 +30,20 @@ export async function readHealth(env: Env): Promise<HealthKV> {
   return v ?? structuredClone(EMPTY_HEALTH);
 }
 
-export async function writeNodes(env: Env, value: NodesKV): Promise<void> {
-  const prev = await readNodes(env);
+export async function writeNodes(env: Env, value: NodesKV, cachedPrev?: NodesKV): Promise<void> {
+  const prev = cachedPrev ?? await readNodes(env);
   if (nodesEqual(prev, value)) return;
   await env.EMBY_KV.put(KV_KEY_NODES, JSON.stringify(value));
 }
 
-export async function writeEmbys(env: Env, value: EmbysKV): Promise<void> {
-  const prev = await readEmbys(env);
+export async function writeEmbys(env: Env, value: EmbysKV, cachedPrev?: EmbysKV): Promise<void> {
+  const prev = cachedPrev ?? await readEmbys(env);
   if (embysEqual(prev, value)) return;
   await env.EMBY_KV.put(KV_KEY_EMBYS, JSON.stringify(value));
 }
 
-export async function writeHealth(env: Env, value: HealthKV): Promise<void> {
-  const prev = await readHealth(env);
+export async function writeHealth(env: Env, value: HealthKV, cachedPrev?: HealthKV): Promise<void> {
+  const prev = cachedPrev ?? await readHealth(env);
   if (healthEqual(prev, value)) return;
   await env.EMBY_KV.put(KV_KEY_HEALTH, JSON.stringify(value));
 }
