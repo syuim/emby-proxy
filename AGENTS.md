@@ -89,6 +89,6 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 
 | # | 目标 | 命令 |
 |---|---|---|
-| 1 | 节点日志（dash） | `ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz 'docker logs --tail 100 emby-proxy-emby-proxy-1'` |
+| 1 | 节点日志（dash） | `ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz 'docker logs --tail 100 proxy-go-emby-proxy-1'` |
 | 2 | Worker 实时日志 | `cd cf-worker && npx wrangler tail --format pretty` |
 | 3 | KV 内容 | `cd cf-worker && npx wrangler kv key list --binding=EMBY_KV` |
