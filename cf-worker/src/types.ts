@@ -2,6 +2,7 @@ export interface NodeRecord {
   id: string;
   name: string;
   public_url: string;
+  is_default?: boolean;
   created_at: string;
 }
 
@@ -51,4 +52,5 @@ export interface Env {
   EMBY_KV: KVNamespace;
   ADMIN_TOKEN: string;
   EMBY_SYNC_TOKEN: string;
+  DIRECT_PROXY_TOKEN?: string;
 }

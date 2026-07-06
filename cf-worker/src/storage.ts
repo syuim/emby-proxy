@@ -72,6 +72,7 @@ export function nodesEqual(a: NodesKV, b: NodesKV): boolean {
       an.id !== bn.id ||
       an.name !== bn.name ||
       an.public_url !== bn.public_url ||
+      !!an.is_default !== !!bn.is_default ||
       an.created_at !== bn.created_at
     ) {
       return false;
