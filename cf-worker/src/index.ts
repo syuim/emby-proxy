@@ -1,6 +1,6 @@
 import { routeAdmin } from "./admin";
 import { runHealthCycle } from "./health";
-import { handleClientRequest } from "./router";
+import { handleClientRequest, handleDirectRequest } from "./router";
 import type { Env } from "./types";
 
 export default {
@@ -19,6 +19,14 @@ export default {
 
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
       return routeAdmin(request, env);
+    }
+
+    // Direct proxy: /<DIRECT_PROXY_TOKEN>/<backend_url>
+    if (env.DIRECT_PROXY_TOKEN) {
+      const first = url.pathname.split("/").filter(Boolean)[0];
+      if (first === env.DIRECT_PROXY_TOKEN) {
+        return handleDirectRequest(request, env, ctx);
+      }
     }
 
     return handleClientRequest(request, env, ctx);

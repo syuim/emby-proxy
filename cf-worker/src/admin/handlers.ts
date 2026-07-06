@@ -28,11 +28,11 @@ export async function handleListNodes(env: Env): Promise<Response> {
 }
 
 export async function handleAddNode(req: JsonRequest, env: Env): Promise<Response> {
-  const { name, public_url } = req.body ?? {};
+  const { name, public_url, is_default } = req.body ?? {};
   if (typeof name !== "string" || typeof public_url !== "string") {
     return json(400, { error: "name 与 public_url 必填" });
   }
-  const trimmed = { name: name.trim(), public_url: public_url.trim() };
+  const trimmed = { name: name.trim(), public_url: public_url.trim().replace(/\/$/, "") };
   const validation = validateNode(trimmed);
   if (validation) return json(400, { error: validation });
 
@@ -43,10 +43,14 @@ export async function handleAddNode(req: JsonRequest, env: Env): Promise<Respons
   if (nodes.nodes.some((n) => n.public_url === trimmed.public_url)) {
     return json(400, { error: `URL '${trimmed.public_url}' 已被占用` });
   }
+  if (is_default) {
+    nodes.nodes.forEach((n) => (n.is_default = false));
+  }
   const newNode: NodeRecord = {
     id: generateNodeId(nodes),
     name: trimmed.name,
-    public_url: trimmed.public_url.replace(/\/$/, ""),
+    public_url: trimmed.public_url,
+    is_default: !!is_default,
     created_at: new Date().toISOString(),
   };
   nodes.nodes.push(newNode);
@@ -64,7 +68,7 @@ export async function handleUpdateNode(
   if (!node) return json(404, { error: "节点不存在" });
 
   let changed = false;
-  const { name, public_url } = req.body ?? {};
+  const { name, public_url, is_default } = req.body ?? {};
   if (typeof name === "string" && name.trim()) {
     const v = name.trim();
     if (nodes.nodes.some((n) => n.id !== id && n.name === v)) {
@@ -86,6 +90,13 @@ export async function handleUpdateNode(
       node.public_url = v;
       changed = true;
     }
+  }
+  if (typeof is_default === "boolean" && is_default !== node.is_default) {
+    node.is_default = is_default;
+    changed = true;
+  }
+  if (changed && node.is_default) {
+    nodes.nodes.forEach((n) => { if (n.id !== id) n.is_default = false; });
   }
   if (!changed) return json(200, { ok: true, node, skipped: true });
   await writeNodes(env, nodes);
@@ -150,7 +161,17 @@ export async function handleUpdateEmby(
   if (!emby) return json(404, { error: "emby 不存在" });
 
   let changed = false;
-  const { backend_url, node_id } = req.body ?? {};
+  const { name: newName, backend_url, node_id } = req.body ?? {};
+  if (typeof newName === "string" && newName.trim() && newName.trim() !== name) {
+    const v = newName.trim();
+    if (embys.embys.some((e) => e.name === v)) {
+      return json(400, { error: `emby 名 '${v}' 已存在` });
+    }
+    const err = validateEmby({ ...emby, name: v });
+    if (err) return json(400, { error: err });
+    emby.name = v;
+    changed = true;
+  }
   if (typeof backend_url === "string" && backend_url.trim()) {
     const v = backend_url.trim().replace(/\/$/, "");
     if (v !== emby.backend_url) {

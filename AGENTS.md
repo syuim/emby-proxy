@@ -51,7 +51,10 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 
 ### cf-worker（wrangler secrets）
 
-`ADMIN_TOKEN`（管理 UI 登录）、`EMBY_SYNC_TOKEN`（推节点用）。
+`ADMIN_TOKEN`（管理 UI 登录）、`EMBY_SYNC_TOKEN`（推节点用）、`DIRECT_PROXY_TOKEN`（可选，直连代理自动注册）。
+
+- `DIRECT_PROXY_TOKEN` 可不设，不设则功能关闭。设置后 `/<token>/https://backend/path` 会被 cf-worker 拦截，自动在 KV 中创建 emby 配置（分配到默认节点），然后 307 到该节点代理。
+- **风险**：此 token 出现在 URL 路径中，任何拿到路径日志的人等同于拥有 open-proxy 权限。建议用强随机字符串。
 
 **关键约束**：
 - `EMBY_SYNC_TOKEN` 在 cf-worker 与所有节点上必须 **byte-for-byte** 一致，不一致 → 节点 401
@@ -66,7 +69,7 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 
 ## 部署
 
-- **CF Worker**：`cf-worker/**` push 到 `main` 自动触发 GitHub Actions
+- **CF Worker**：`cf-worker/**` 做完改动后 → 提交到当前分支 → 合并到 `main` 推送，触发 GitHub Actions 自动部署。直接说"部署"或"合并到 main"即可，不需要问。
 - **Go 节点**：详见 `ops` agent 机器清单。以 `dash` 为例：
 
   ```bash
@@ -75,6 +78,13 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
   ```
 
   健康验证：`curl http://dash.127315.xyz:8080/__health`
+
+### 部署后验证
+
+1. **CF Worker**：`gh run list --branch main --limit 1 --json conclusion,displayTitle` → 确认 `conclusion` 为 `"success"`
+2. **Go 节点**：`curl -s http://<host>:8080/__health` → 确认返回 `{"ok":true,...}`；`docker logs --tail 5 <container>` → 确认无启动错误
+3. **Direct Proxy**（如已设置 `DIRECT_PROXY_TOKEN`）：`curl -s -o /dev/null -w "%{http_code}" https://<worker>/{token}/https://example.com` → 返回 `307`
+4. **面板验证**：`https://<worker>/admin` → 节点列表应有"默认"标记，新增 emby 记录
 
 ## 提交信息
 

@@ -1,5 +1,7 @@
 import { RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
-import { readEmbys, readHealth, readNodes } from "./storage";
+import { readEmbys, readHealth, readNodes, writeEmbys } from "./storage";
+import { buildSnapshot, pushSnapshotToAll } from "./sync";
+import { mergeSyncResults } from "./health";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
 
 
@@ -52,6 +54,113 @@ export async function handleClientRequest(
       "Cache-Control": "no-store",
     },
   });
+}
+
+// ---------- Direct proxy (auto-register) ----------
+
+export async function handleDirectRequest(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const token = env.DIRECT_PROXY_TOKEN!;
+
+  // Path: /<token>/<backend_url>
+  // Stripping /<token>/ gives the full backend URL
+  const prefix = "/" + token + "/";
+  const backendUrlFull = path.startsWith(prefix) ? path.slice(prefix.length) : "";
+  if (!backendUrlFull.startsWith("http://") && !backendUrlFull.startsWith("https://")) {
+    return new Response("Bad Request: backend URL must start with http:// or https://", { status: 400 });
+  }
+
+  let backendOrigin: string;
+  let subpath: string;
+  try {
+    const parsed = new URL(backendUrlFull);
+    backendOrigin = parsed.origin;
+    subpath = parsed.pathname;
+    if (isPrivateHost(parsed.hostname)) {
+      return new Response("Forbidden: backend URL points to a private or reserved address", { status: 403 });
+    }
+  } catch {
+    return new Response("Bad Request: invalid backend URL", { status: 400 });
+  }
+
+  const [embysKV, nodesKV] = await Promise.all([readEmbys(env), readNodes(env)]);
+
+  let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
+  if (!emby) {
+    const defaultNode = nodesKV.nodes.find((n) => n.is_default);
+    if (!defaultNode) {
+      return new Response("Bad Gateway: no default node configured", { status: 502 });
+    }
+
+    const name = await generateDirectEmbyName(backendOrigin);
+    if (embysKV.embys.some((e) => e.name === name)) {
+      return new Response("Internal Server Error: name collision", { status: 500 });
+    }
+
+    emby = {
+      name,
+      backend_url: backendOrigin,
+      node_id: defaultNode.id,
+      created_at: new Date().toISOString(),
+    };
+    embysKV.version += 1;
+    embysKV.embys.push(emby);
+    await writeEmbys(env, embysKV);
+
+    // Push to all nodes (fire-and-forget, health cycle catches failures)
+    ctx.waitUntil((async () => {
+      const snapshot = buildSnapshot(embysKV);
+      const results = await pushSnapshotToAll(nodesKV.nodes, snapshot, env.EMBY_SYNC_TOKEN, "direct-register");
+      const health = await readHealth(env);
+      await mergeSyncResults(env, health, results);
+    })());
+  }
+
+  const node = await chooseNode(env, emby, nodesKV.nodes);
+  if (!node) {
+    return new Response("Bad Gateway: no available node", { status: 502 });
+  }
+
+  const nodePath = "/" + emby.name + subpath;
+  const target = buildTargetUrl(node.public_url, nodePath, url.search);
+
+  return new Response(null, {
+    status: 307,
+    headers: { Location: target, "Cache-Control": "no-store" },
+  });
+}
+
+async function generateDirectEmbyName(backendUrl: string): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(backendUrl));
+  const hex = Array.from(new Uint8Array(hash, 0, 8))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return "d_" + hex;
+}
+
+// ponytail: simple IP check for SSRF at cf-worker level. Hostname-based SSRF is caught by proxy-go's isDangerousRedirect.
+function isPrivateHost(host: string): boolean {
+  // Strip IPv6 brackets
+  const ip = host.startsWith("[") ? host.slice(1, -1) : host;
+  // IPv4 check
+  const parts = ip.split(".").map(Number);
+  if (parts.length === 4 && parts.every((p) => !isNaN(p) && p >= 0 && p <= 255)) {
+    if (parts[0] === 10) return true;
+    if (parts[0] === 127) return true;
+    if (parts[0] === 169 && parts[1] === 254) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    if (parts[0] === 0) return true;
+  }
+  // Common IPv6 private/reserved
+  if (ip === "::1" || ip === "0:0:0:0:0:0:0:1") return true;
+  if (ip.startsWith("fe80:") || ip.startsWith("fc") || ip.startsWith("fd")) return true;
+  return false;
 }
 
 function isCacheableImageRequest(request: Request, path: string): boolean {
@@ -155,7 +264,25 @@ async function chooseNode(
 
 function buildTargetUrl(publicUrl: string, path: string, search: string): string {
   const base = publicUrl.replace(/\/$/, "");
-  return `${base}${path}${search}`;
+  const normalized = normalizePath(path);
+  return `${base}${normalized}${search}`;
+}
+
+// ponytail: collapse .. segments to prevent path traversal past the emby prefix.
+// Browser clients already normalize, but raw HTTP clients may send unnormalized paths.
+function normalizePath(path: string): string {
+  const parts = path.split("/");
+  const result: string[] = [];
+  for (const p of parts) {
+    if (p === "..") {
+      if (result.length > 0 && result[result.length - 1] !== "..") {
+        result.pop();
+      }
+    } else if (p !== "" && p !== ".") {
+      result.push(p);
+    }
+  }
+  return "/" + result.join("/");
 }
 
 function notFound(reason: string): Response {
