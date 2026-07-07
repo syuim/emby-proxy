@@ -360,8 +360,8 @@ func isDangerousRedirect(rawURL string) bool {
 		return true
 	}
 
-	// Resolve hostname to IP and check ranges
-	ips, err := net.LookupIP(host)
+	// Resolve hostname to IP and check ranges (shared cache with isDangerousBackendURL)
+	ips, err := cachedLookupIP(host)
 	if err != nil {
 		// Can't resolve — check if it looks like a raw IP
 		ip := net.ParseIP(host)

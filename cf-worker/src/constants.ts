@@ -13,7 +13,7 @@ export const FAIL_THRESHOLD = 2;
 // 失败节点降频：连续失败 >= THROTTLE_FAIL_THRESHOLD 次后，
 // 在 THROTTLE_PROBE_INTERVAL_MS 内只探测一次，避免反复打已知死节点
 export const THROTTLE_FAIL_THRESHOLD = 5;
-export const THROTTLE_PROBE_INTERVAL_MS = 9 * 60 * 1000;
+export const THROTTLE_PROBE_INTERVAL_MS = 30 * 60 * 1000;
 
 export const EMBY_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 

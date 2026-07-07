@@ -1,6 +1,6 @@
 import adminHtml from "../admin.html";
 import type { Env } from "../types";
-import { buildLoginCookie, buildLogoutCookie, checkAdminAuth } from "./auth";
+import { buildLoginCookie, buildLogoutCookie, checkAdminAuth, createSession, destroySession } from "./auth";
 import {
   handleAddEmby,
   handleAddNode,
@@ -31,7 +31,7 @@ export async function routeAdmin(request: Request, env: Env): Promise<Response> 
     return handleLogin(request, env);
   }
   if (path === "/admin/api/logout" && method === "POST") {
-    return handleLogout();
+    return handleLogout(request);
   }
 
   // 余下接口都要鉴权
@@ -83,17 +83,19 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (typeof token !== "string" || token !== env.ADMIN_TOKEN) {
     return jsonError(401, "token 无效");
   }
+  const sessionId = createSession();
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Set-Cookie": buildLoginCookie(env.ADMIN_TOKEN),
+      "Set-Cookie": buildLoginCookie(sessionId),
       "Cache-Control": "no-store",
     },
   });
 }
 
-function handleLogout(): Response {
+function handleLogout(request: Request): Response {
+  destroySession(request);
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {

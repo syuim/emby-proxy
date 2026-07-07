@@ -36,6 +36,8 @@ func (ah *AdminHandler) HandleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+
 	var data struct {
 		Version int          `json:"version"`
 		Proxies []ProxyEntry `json:"proxies"`
