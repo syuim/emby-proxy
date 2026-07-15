@@ -7,7 +7,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o emby-proxy .
 
 # Runtime stage
 FROM alpine:3.19
-RUN apk --no-cache add ca-certificates wget
+RUN apk --no-cache add ca-certificates wget tzdata
 COPY --from=builder /build/emby-proxy /usr/local/bin/emby-proxy
 
 EXPOSE 8080
