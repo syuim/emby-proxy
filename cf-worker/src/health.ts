@@ -23,7 +23,7 @@ import type {
   PushResult,
 } from "./types";
 
-interface ProbeOutcome {
+export interface ProbeOutcome {
   node: NodeRecord;
   ok: boolean;
   latency_ms: number | null;
@@ -31,6 +31,28 @@ interface ProbeOutcome {
   applied_version: number | null;
   // 失败降频：本周期被跳过，未真实探测
   throttled?: boolean;
+}
+
+/**
+ * 立即探测节点，失败后等 1s 重试，最多 maxRetries 次。
+ * 首次成功即返回（不再重试），用于添加节点后的实时检测。
+ */
+export async function immediateProbe(
+  node: NodeRecord,
+  syncToken: string,
+  maxRetries: number,
+): Promise<NodeHealth> {
+  let prev = emptyNodeHealth();
+  for (let i = 0; i < maxRetries; i++) {
+    const outcome = await probeNode(node, syncToken, prev);
+    const merged = mergeHealth(prev, outcome);
+    if (merged.healthy) return merged;
+    prev = merged;
+    if (i < maxRetries - 1) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  return prev;
 }
 
 export async function runHealthCycle(

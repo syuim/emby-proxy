@@ -18,7 +18,7 @@ export default {
     }
 
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-      return routeAdmin(request, env);
+      return routeAdmin(request, env, ctx);
     }
 
     // Direct proxy: /<DIRECT_PROXY_TOKEN>/<backend_url>

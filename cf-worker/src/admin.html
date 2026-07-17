@@ -565,17 +565,28 @@
             `}
           </div>
           <div class="panel">
-            <div class="toolbar"><h2>Emby 列表</h2></div>
+            <div class="toolbar">
+              <h2>Emby 列表</h2>
+              <div id="batch-toolbar" class="actions" style="display:none;">
+                <span class="hint" id="batch-count">已选 0 项</span>
+                <select id="batch-node" style="width:auto;">${optionsHtml}</select>
+                <button class="btn btn-primary" id="btn-batch">批量调整节点</button>
+              </div>
+            </div>
             ${state.embys.length === 0
               ? '<div class="empty"><div class="empty-icon">📭</div>还没有 emby 配置</div>'
               : `<div class="table-wrap"><table>
-                  <thead><tr><th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:200px;">操作</th></tr></thead>
+                  <thead><tr>
+                    <th style="width:36px;"><input type="checkbox" id="select-all" /></th>
+                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:200px;">操作</th>
+                  </tr></thead>
                   <tbody>
                     ${state.embys.map((e) => {
                       const editing = state.editingEmby === e.name;
                       if (editing) {
                         return `
                           <tr data-name="${escapeHtml(e.name)}" data-mode="edit">
+                            <td></td>
                             <td><input class="row-name" value="${escapeHtml(e.name)}" /></td>
                             <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
                             <td>
@@ -593,6 +604,7 @@
                       }
                       return `
                         <tr data-name="${escapeHtml(e.name)}" data-mode="view">
+                          <td><input type="checkbox" class="row-select" data-name="${escapeHtml(e.name)}" /></td>
                           <td><strong>${escapeHtml(e.name)}</strong></td>
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
                           <td>${escapeHtml(nodeName(e.node_id))}</td>
@@ -666,6 +678,56 @@
             };
           }
         });
+
+        // ---------- 多选批量调整 ----------
+        function updateBatchToolbar() {
+          const checked = c.querySelectorAll(".row-select:checked");
+          const toolbar = c.querySelector("#batch-toolbar");
+          const count = c.querySelector("#batch-count");
+          if (checked.length === 0) {
+            toolbar.style.display = "none";
+          } else {
+            toolbar.style.display = "flex";
+            count.textContent = `已选 ${checked.length} 项`;
+          }
+        }
+
+        const selectAll = c.querySelector("#select-all");
+        if (selectAll) {
+          selectAll.onclick = () => {
+            const checked = selectAll.checked;
+            c.querySelectorAll(".row-select").forEach(cb => cb.checked = checked);
+            updateBatchToolbar();
+          };
+        }
+
+        c.querySelectorAll(".row-select").forEach(cb => {
+          cb.onclick = () => {
+            if (selectAll) selectAll.checked = false;
+            updateBatchToolbar();
+          };
+        });
+
+        const batchBtn = c.querySelector("#btn-batch");
+        if (batchBtn) {
+          batchBtn.onclick = async () => {
+            const checked = c.querySelectorAll(".row-select:checked");
+            const names = Array.from(checked).map(cb => cb.dataset.name);
+            const nodeId = c.querySelector("#batch-node").value;
+            if (names.length === 0) { toast("请至少选择一个 emby", "err"); return; }
+            if (!confirm(`将 ${names.length} 个 emby 的节点统一调整？`)) return;
+            try {
+              await api("/admin/api/embys", {
+                method: "PUT",
+                body: JSON.stringify({ names, node_id: nodeId }),
+              });
+              toast(`已更新 ${names.length} 个 emby 并推送到所有节点`, "ok");
+              await refreshAll();
+            } catch (e) { toast(e.message, "err"); }
+          };
+        }
+
+        updateBatchToolbar();
       }
 
       // ---------- Nodes（含 Health 列） ----------

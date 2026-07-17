@@ -4,6 +4,7 @@ import { buildLoginCookie, buildLogoutCookie, checkAdminAuth, createSession, des
 import {
   handleAddEmby,
   handleAddNode,
+  handleBatchUpdateEmbys,
   handleDeleteEmby,
   handleDeleteNode,
   handleHealth,
@@ -14,7 +15,7 @@ import {
   handleUpdateNode,
 } from "./handlers";
 
-export async function routeAdmin(request: Request, env: Env): Promise<Response> {
+export async function routeAdmin(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
@@ -47,7 +48,7 @@ export async function routeAdmin(request: Request, env: Env): Promise<Response> 
   // Nodes CRUD
   if (path === "/admin/api/nodes") {
     if (method === "GET") return handleListNodes(env);
-    if (method === "POST") return wrapJson(request, (req) => handleAddNode(req, env));
+    if (method === "POST") return wrapJson(request, (req) => handleAddNode(req, env, ctx));
   }
   const nodeMatch = path.match(/^\/admin\/api\/nodes\/([^/]+)$/);
   if (nodeMatch) {
@@ -61,6 +62,7 @@ export async function routeAdmin(request: Request, env: Env): Promise<Response> 
   if (path === "/admin/api/embys") {
     if (method === "GET") return handleListEmbys(env);
     if (method === "POST") return wrapJson(request, (req) => handleAddEmby(req, env));
+    if (method === "PUT") return wrapJson(request, (req) => handleBatchUpdateEmbys(req, env));
   }
   const embyMatch = path.match(/^\/admin\/api\/embys\/([^/]+)$/);
   if (embyMatch) {

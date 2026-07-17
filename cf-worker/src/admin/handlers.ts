@@ -4,10 +4,11 @@ import {
   readHealth,
   readNodes,
   writeEmbys,
+  writeHealth,
   writeNodes,
 } from "../storage";
 import { buildSnapshot, pushSnapshotToAll } from "../sync";
-import { mergeSyncResults } from "../health";
+import { immediateProbe, mergeSyncResults } from "../health";
 import type {
   EmbyRecord,
   EmbysKV,
@@ -27,7 +28,7 @@ export async function handleListNodes(env: Env): Promise<Response> {
   return json(200, { ...nodes, health: health.nodes });
 }
 
-export async function handleAddNode(req: JsonRequest, env: Env): Promise<Response> {
+export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const { name, public_url, is_default } = req.body ?? {};
   if (typeof name !== "string" || typeof public_url !== "string") {
     return json(400, { error: "name 与 public_url 必填" });
@@ -55,6 +56,17 @@ export async function handleAddNode(req: JsonRequest, env: Env): Promise<Respons
   };
   nodes.nodes.push(newNode);
   await writeNodes(env, nodes);
+  // 添加节点后立即探测，写入健康状态
+  const probeTask = (async () => {
+    const nodeHealth = await immediateProbe(newNode, env.EMBY_SYNC_TOKEN, 3);
+    const health = await readHealth(env);
+    health.nodes[newNode.id] = nodeHealth;
+    await writeHealth(env, health);
+  })();
+  if (ctx) {
+    ctx.waitUntil(probeTask);
+  }
+  // ctx 不可用时 fire-and-forget
   return json(201, { ok: true, node: newNode });
 }
 
@@ -208,6 +220,43 @@ export async function handleDeleteEmby(env: Env, name: string): Promise<Response
   await writeEmbys(env, embys);
   const push = await fanoutPush(env, embys, nodes, "delete-emby");
   return json(200, { ok: true, push_results: push });
+}
+
+export async function handleBatchUpdateEmbys(
+  req: JsonRequest,
+  env: Env,
+): Promise<Response> {
+  const { names, node_id } = req.body ?? {};
+  if (!Array.isArray(names) || names.length === 0 || typeof node_id !== "string") {
+    return json(400, { error: "names（数组）与 node_id 必填" });
+  }
+
+  const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
+
+  // 验证 node_id 存在
+  if (!nodes.nodes.some((n) => n.id === node_id)) {
+    return json(400, { error: `node_id '${node_id}' 不存在` });
+  }
+
+  // 批量更新
+  let changed = 0;
+  for (const name of names) {
+    const emby = embys.embys.find((e) => e.name === name);
+    if (!emby) return json(400, { error: `emby '${name}' 不存在` });
+    if (emby.node_id !== node_id) {
+      emby.node_id = node_id;
+      changed++;
+    }
+  }
+
+  if (changed === 0) {
+    return json(200, { ok: true, skipped: true, changed: 0 });
+  }
+
+  embys.version += 1;
+  await writeEmbys(env, embys);
+  const push = await fanoutPush(env, embys, nodes, "batch-update-embys");
+  return json(200, { ok: true, changed, push_results: push });
 }
 
 export async function handleHealth(env: Env): Promise<Response> {
