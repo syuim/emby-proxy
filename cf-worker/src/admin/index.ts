@@ -32,11 +32,11 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
     return handleLogin(request, env);
   }
   if (path === "/admin/api/logout" && method === "POST") {
-    return handleLogout(request);
+    return handleLogout(request, env);
   }
 
   // 余下接口都要鉴权
-  if (!checkAdminAuth(request, env)) {
+  if (!(await checkAdminAuth(request, env))) {
     return jsonError(401, "unauthorized");
   }
 
@@ -85,7 +85,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   if (typeof token !== "string" || token !== env.ADMIN_TOKEN) {
     return jsonError(401, "token 无效");
   }
-  const sessionId = createSession();
+  const sessionId = await createSession(env);
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
@@ -96,8 +96,8 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
   });
 }
 
-function handleLogout(request: Request): Response {
-  destroySession(request);
+async function handleLogout(request: Request, env: Env): Promise<Response> {
+  await destroySession(request, env);
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
