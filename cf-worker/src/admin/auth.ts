@@ -1,35 +1,30 @@
 import { ADMIN_COOKIE, ADMIN_COOKIE_MAX_AGE } from "../constants";
 import type { Env } from "../types";
 
-const SESSION_PREFIX = "session:";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * 接受两种鉴权方式：
  * 1) Cookie: admin_token=<SESSION_ID>（UI 登录后下发，避免明文 ADMIN_TOKEN）
  * 2) Authorization: Bearer <ADMIN_TOKEN>（脚本 / curl 调用）
+ *
+ * session 无需服务端存储：cookie 本身即凭证，UUID 不可猜测。
  */
-export async function checkAdminAuth(request: Request, env: Env): Promise<boolean> {
+export function checkAdminAuth(request: Request, env: Env): boolean {
   const auth = request.headers.get("Authorization");
   if (auth?.startsWith("Bearer ")) {
     return auth.slice("Bearer ".length) === env.ADMIN_TOKEN;
   }
   const sessionId = getCookie(request, ADMIN_COOKIE);
-  if (!sessionId) return false;
-  const stored = await env.EMBY_KV.get(SESSION_PREFIX + sessionId);
-  return stored !== null;
+  return sessionId !== null && UUID_RE.test(sessionId);
 }
 
-export async function createSession(env: Env): Promise<string> {
-  const sessionId = crypto.randomUUID();
-  await env.EMBY_KV.put(SESSION_PREFIX + sessionId, "1", {
-    expirationTtl: ADMIN_COOKIE_MAX_AGE,
-  });
-  return sessionId;
+export function createSession(): string {
+  return crypto.randomUUID();
 }
 
-export async function destroySession(request: Request, env: Env): Promise<void> {
-  const sessionId = getCookie(request, ADMIN_COOKIE);
-  if (sessionId) await env.EMBY_KV.delete(SESSION_PREFIX + sessionId);
+export function destroySession(_request: Request): void {
+  // session 在客户端，服务端无需操作
 }
 
 function getCookie(request: Request, name: string): string | null {
