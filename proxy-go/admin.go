@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -22,7 +23,8 @@ func (ah *AdminHandler) checkAuth(r *http.Request) bool {
 	if !strings.HasPrefix(auth, "Bearer ") {
 		return false
 	}
-	return auth[len("Bearer "):] == ah.syncToken
+	token := auth[len("Bearer "):]
+	return subtle.ConstantTimeCompare([]byte(token), []byte(ah.syncToken)) == 1
 }
 
 // HandleSync receives config snapshot pushes from master: POST /admin/sync

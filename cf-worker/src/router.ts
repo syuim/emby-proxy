@@ -99,26 +99,31 @@ export async function handleDirectRequest(
 
     const name = await generateDirectEmbyName(backendOrigin);
     if (embysKV.embys.some((e) => e.name === name)) {
-      return new Response("Internal Server Error: name collision", { status: 500 });
+      const fresh = await readEmbys(env);
+      emby = fresh.embys.find((e) => e.backend_url === backendOrigin);
+      if (!emby) {
+        return new Response("Internal Server Error: name collision", { status: 500 });
+      }
     }
 
-    emby = {
-      name,
-      backend_url: backendOrigin,
-      node_id: defaultNode.id,
-      created_at: new Date().toISOString(),
-    };
-    embysKV.version += 1;
-    embysKV.embys.push(emby);
-    await writeEmbys(env, embysKV);
+    if (!emby) {
+      emby = {
+        name,
+        backend_url: backendOrigin,
+        node_id: defaultNode.id,
+        created_at: new Date().toISOString(),
+      };
+      embysKV.version += 1;
+      embysKV.embys.push(emby);
+      await writeEmbys(env, embysKV);
 
-    // Push to all nodes (fire-and-forget, health cycle catches failures)
-    ctx.waitUntil((async () => {
-      const snapshot = buildSnapshot(embysKV);
-      const results = await pushSnapshotToAll(nodesKV.nodes, snapshot, env.EMBY_SYNC_TOKEN, "direct-register");
-      const health = await readHealth(env);
-      await mergeSyncResults(env, health, results);
-    })());
+      ctx.waitUntil((async () => {
+        const snapshot = buildSnapshot(embysKV);
+        const results = await pushSnapshotToAll(nodesKV.nodes, snapshot, env.EMBY_SYNC_TOKEN, "direct-register");
+        const health = await readHealth(env);
+        await mergeSyncResults(env, health, results);
+      })());
+    }
   }
 
   const node = await chooseNode(env, emby, nodesKV.nodes);
@@ -144,7 +149,7 @@ async function generateDirectEmbyName(backendUrl: string): Promise<string> {
 }
 
 // ponytail: simple IP check for SSRF at cf-worker level. Hostname-based SSRF is caught by proxy-go's isDangerousRedirect.
-function isPrivateHost(host: string): boolean {
+export function isPrivateHost(host: string): boolean {
   // Strip IPv6 brackets
   const ip = host.startsWith("[") ? host.slice(1, -1) : host;
   // IPv4 check
@@ -163,7 +168,7 @@ function isPrivateHost(host: string): boolean {
   return false;
 }
 
-function isCacheableImageRequest(request: Request, path: string): boolean {
+export function isCacheableImageRequest(request: Request, path: string): boolean {
   if (request.method !== "GET") return false;
   if (request.headers.has("Range")) return false;
   return /\/Images\//i.test(path);
@@ -211,7 +216,7 @@ async function serveCachedImage(
   return resp;
 }
 
-function buildImageCacheKey(target: string): Request {
+export function buildImageCacheKey(target: string): Request {
   const u = new URL(target);
   for (const p of STRIP_AUTH_PARAMS) {
     u.searchParams.delete(p);
@@ -262,7 +267,7 @@ async function chooseNode(
   return null;
 }
 
-function buildTargetUrl(publicUrl: string, path: string, search: string): string {
+export function buildTargetUrl(publicUrl: string, path: string, search: string): string {
   const base = publicUrl.replace(/\/$/, "");
   const normalized = normalizePath(path);
   return `${base}${normalized}${search}`;
@@ -270,7 +275,7 @@ function buildTargetUrl(publicUrl: string, path: string, search: string): string
 
 // ponytail: collapse .. segments to prevent path traversal past the emby prefix.
 // Browser clients already normalize, but raw HTTP clients may send unnormalized paths.
-function normalizePath(path: string): string {
+export function normalizePath(path: string): string {
   const parts = path.split("/");
   const result: string[] = [];
   for (const p of parts) {

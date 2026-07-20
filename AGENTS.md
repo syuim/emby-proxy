@@ -35,9 +35,9 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ## 故障转移行为
 
-emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健康的 → 全不健康兜底原 `node_id`（不返 503）。健康检测：cron 每 3 分钟探活，连续 2 次失败降级 / 1 次成功恢复。
+emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健康的 → 全不健康兜底原 `node_id`（不返 503）。健康检测：cron 每 10 分钟探活，连续 2 次失败降级 / 1 次成功恢复。
 
-探活降频：节点连续失败 ≥5 次后，9 分钟内只真实探测一次，避免反复打已知死节点。探测成功后若节点 `applied_version` 落后 KV，会异步补推一次配置。
+探活降频：节点连续失败 ≥5 次后，30 分钟内只真实探测一次，避免反复打已知死节点。探测成功后若节点 `applied_version` 落后 KV，会异步补推一次配置。
 
 ## 必需环境变量
 
@@ -70,11 +70,18 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 ## 部署
 
 - **CF Worker**：`cf-worker/**` 做完改动后 → 提交到当前分支 → 合并到 `main` 推送，触发 GitHub Actions 自动部署。直接说"部署"或"合并到 main"即可，不需要问。
-- **Go 节点**：详见 `ops` agent 机器清单。以 `dash` 为例：
+- **Go 节点**：以 `dash` 为例：
 
   ```bash
-  ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz \
-    "cd /root/docker/emby-proxy && git pull && cd proxy-go && docker compose build && docker compose up -d"
+  ssh -i ~/.ssh/syu_vps -p 22 admin@dash.127315.xyz \
+    "sudo docker exec -i proxy-go-emby-proxy-1 sh -c 'cd /app && git pull && docker compose build && docker compose up -d'"
+  ```
+
+  或先交互登录再操作：
+  ```bash
+  ssh -i ~/.ssh/syu_vps -p 22 admin@dash.127315.xyz
+  sudo -i  # root 密码 zshs
+  cd /root/docker/emby-proxy && git pull && cd proxy-go && docker compose build && docker compose up -d
   ```
 
   健康验证：`curl http://dash.127315.xyz:8080/__health`
@@ -99,6 +106,6 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 
 | # | 目标 | 命令 |
 |---|---|---|
-| 1 | 节点日志（dash） | `ssh -i ~/.ssh/syu_vps -p 22222 root@dash.127315.xyz 'docker logs --tail 100 proxy-go-emby-proxy-1'` |
+| 1 | 节点日志（dash） | `ssh -i ~/.ssh/syu_vps -p 22 admin@dash.127315.xyz 'sudo docker logs --tail 100 proxy-go-emby-proxy-1'` |
 | 2 | Worker 实时日志 | `cd cf-worker && npx wrangler tail --format pretty` |
 | 3 | KV 内容 | `cd cf-worker && npx wrangler kv key list --binding=EMBY_KV` |
