@@ -70,21 +70,7 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 ## 部署
 
 - **CF Worker**：`cf-worker/**` 做完改动后 → 提交到当前分支 → 合并到 `main` 推送，触发 GitHub Actions 自动部署。直接说"部署"或"合并到 main"即可，不需要问。
-- **Go 节点**：以 `dash` 为例：
-
-  ```bash
-  ssh -i ~/.ssh/syu_vps -p 22 admin@dash.127315.xyz \
-    "sudo docker exec -i proxy-go-emby-proxy-1 sh -c 'cd /app && git pull && docker compose build && docker compose up -d'"
-  ```
-
-  或先交互登录再操作：
-  ```bash
-  ssh -i ~/.ssh/syu_vps -p 22 admin@dash.127315.xyz
-  sudo -i  # root 密码 zshs
-  cd /root/docker/emby-proxy && git pull && cd proxy-go && docker compose build && docker compose up -d
-  ```
-
-  健康验证：`curl http://dash.127315.xyz:8080/__health`
+- **Go 节点**：使用 `Agent` 调用 `ops` subagent 执行，机器信息以 ops agent 为准。
 
 ### 部署后验证
 
