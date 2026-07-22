@@ -59,6 +59,7 @@ export async function immediateProbe(
 export async function runHealthCycle(
   env: Env,
   ctx: ExecutionContext,
+  force = false,
 ): Promise<void> {
   const [nodesKV, embysKV, prevHealth] = await Promise.all([
     readNodes(env),
@@ -73,7 +74,7 @@ export async function runHealthCycle(
 
   const outcomes = await Promise.all(
     nodesKV.nodes.map((n) =>
-      probeNode(n, env.EMBY_SYNC_TOKEN, prevHealth.nodes[n.id] ?? emptyNodeHealth()),
+      probeNode(n, env.EMBY_SYNC_TOKEN, prevHealth.nodes[n.id] ?? emptyNodeHealth(), force),
     ),
   );
 
@@ -97,9 +98,12 @@ async function probeNode(
   node: NodeRecord,
   syncToken: string,
   prev: NodeHealth,
+  force = false,
 ): Promise<ProbeOutcome> {
   // 失败降频：连续失败次数足够多时，只在窗口外才真正探测
+  // force=true 时（手动探测）跳过节流，始终真实探测
   if (
+    !force &&
     prev.consecutive_fails >= THROTTLE_FAIL_THRESHOLD &&
     prev.last_check !== null &&
     Date.now() - new Date(prev.last_check).getTime() < THROTTLE_PROBE_INTERVAL_MS

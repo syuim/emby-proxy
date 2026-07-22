@@ -284,7 +284,7 @@ export async function handleHealth(env: Env): Promise<Response> {
 }
 
 export async function handleProbe(env: Env, ctx: ExecutionContext): Promise<Response> {
-  await runHealthCycle(env, ctx);
+  await runHealthCycle(env, ctx, true); // force=true → 绕过节流，始终真实探测
   const health = await readHealth(env);
   return json(200, health);
 }
