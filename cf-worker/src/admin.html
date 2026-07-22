@@ -378,6 +378,50 @@
       }
       .login-card .btn-primary { width: 100%; padding: 11px; }
 
+      /* ============ Tabs row (tabs + add button) ============ */
+      .tabs-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+      .tabs-row .tabs { margin-bottom: 0; }
+
+      /* ============ Modal ============ */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        z-index: 100;
+        animation: fade-in 0.15s ease-out;
+      }
+      .modal {
+        width: 100%;
+        max-width: 440px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-2xl);
+        box-shadow: var(--shadow-lg);
+        padding: 28px;
+        animation: modal-in 0.2s ease-out;
+      }
+      .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+      .modal-header h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+      .modal-body { display: flex; flex-direction: column; gap: 16px; }
+      .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+      @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+      /* ============ Pagination ============ */
+      .pager {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 12px 0 0;
+        font-size: 12px;
+        color: var(--color-text-muted);
+      }
+      .pager .btn { padding: 5px 12px; font-size: 12px; }
+
       .empty {
         text-align: center;
         padding: 56px 16px;
@@ -399,9 +443,10 @@
   </head>
   <body>
     <div id="app"></div>
+    <div id="modal-root"></div>
     <script>
       const $app = document.getElementById("app");
-      const state = { tab: "embys", nodes: [], embys: [], health: {}, theme: "auto", editingEmby: null, editingNode: null };
+      const state = { tab: localStorage.getItem("emby-router-tab") === "nodes" ? "nodes" : "embys", nodes: [], embys: [], health: {}, theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0 };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -483,9 +528,12 @@
             <button class="btn btn-icon" id="btn-logout">登出</button>
           </header>
           <main>
-            <div class="tabs">
-              <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
-              <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
+            <div class="tabs-row">
+              <div class="tabs">
+                <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
+                <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
+              </div>
+              <button class="btn btn-primary" id="btn-add">${state.tab === "embys" ? "+ Emby" : "+ 节点"}</button>
             </div>
             <div id="tab-content"></div>
           </main>
@@ -498,8 +546,12 @@
           render();
         };
         $app.querySelectorAll(".tabs button").forEach((b) => {
-          b.onclick = () => { state.tab = b.dataset.tab; render(); };
+          b.onclick = () => { state.tab = b.dataset.tab; localStorage.setItem("emby-router-tab", state.tab); render(); };
         });
+        $app.querySelector("#btn-add").onclick = () => {
+          if (state.tab === "embys") openAddEmbyModal();
+          else openAddNodeModal();
+        };
         if (state.tab === "embys") renderEmbys();
         else if (state.tab === "nodes") renderNodes();
       }
@@ -533,37 +585,14 @@
       // ---------- Embys ----------
       function renderEmbys() {
         const c = $app.querySelector("#tab-content");
-        const noNodes = state.nodes.length === 0;
         const optionsHtml = state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
+        const pageSize = 15;
+        const totalPages = Math.max(1, Math.ceil(state.embys.length / pageSize));
+        state.embyPage = Math.min(state.embyPage, totalPages - 1);
+        const page = state.embyPage;
+        const paged = state.embys.slice(page * pageSize, (page + 1) * pageSize);
 
         c.innerHTML = `
-          <div class="panel">
-            <h2>添加 Emby</h2>
-            ${noNodes ? '<div class="danger-text">请先到 Nodes 页添加至少一个节点</div>' : `
-              <div class="form-grid">
-                <div class="field">
-                  <label>emby_name <span class="hint">URL 第一段</span></label>
-                  <input id="e-name" placeholder="例如 embyA" />
-                </div>
-                <div class="field">
-                  <label>backend_url</label>
-                  <input id="e-backend" placeholder="http://emby.internal:8096" />
-                </div>
-                <div class="field">
-                  <label>节点</label>
-                  <select id="e-node">${optionsHtml}</select>
-                </div>
-                <div class="field">
-                  <label>&nbsp;</label>
-                  <button class="btn btn-primary" id="e-add">添加</button>
-                </div>
-              </div>
-              <p class="hint" style="margin-top: 14px;">
-                URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
-                307 转所选节点；不健康时随机切到其他健康节点
-              </p>
-            `}
-          </div>
           <div class="panel">
             <div class="toolbar">
               <h2>Emby 列表</h2>
@@ -581,7 +610,7 @@
                     <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:200px;">操作</th>
                   </tr></thead>
                   <tbody>
-                    ${state.embys.map((e) => {
+                    ${paged.map((e) => {
                       const editing = state.editingEmby === e.name;
                       if (editing) {
                         return `
@@ -617,25 +646,19 @@
                       `;
                     }).join("")}
                   </tbody>
-                </table></div>`
+                </table>${totalPages > 1 ? `<div class="pager">
+                  <button class="btn btn-ghost" id="eprev" ${page === 0 ? "disabled" : ""}>上一页</button>
+                  <span>${page + 1} / ${totalPages}</span>
+                  <button class="btn btn-ghost" id="enext" ${page >= totalPages - 1 ? "disabled" : ""}>下一页</button>
+                </div>` : ""}</div>`
             }
           </div>
         `;
 
-        if (!noNodes) {
-          c.querySelector("#e-add").onclick = async () => {
-            const name = c.querySelector("#e-name").value.trim();
-            const backend = c.querySelector("#e-backend").value.trim();
-            const nodeId = c.querySelector("#e-node").value;
-            try {
-              await api("/admin/api/embys", { method: "POST", body: JSON.stringify({
-                name, backend_url: backend, node_id: nodeId,
-              }) });
-              toast("已添加并推送到所有节点", "ok");
-              await refreshAll();
-            } catch (e) { toast(e.message, "err"); }
-          };
-        }
+        const eprev = c.querySelector("#eprev");
+        if (eprev) eprev.onclick = () => { state.embyPage--; render(); };
+        const enext = c.querySelector("#enext");
+        if (enext) enext.onclick = () => { state.embyPage++; render(); };
 
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const name = tr.dataset.name;
@@ -733,29 +756,13 @@
       // ---------- Nodes（含 Health 列） ----------
       function renderNodes() {
         const c = $app.querySelector("#tab-content");
+        const pageSize = 15;
+        const totalPages = Math.max(1, Math.ceil(state.nodes.length / pageSize));
+        state.nodePage = Math.min(state.nodePage, totalPages - 1);
+        const page = state.nodePage;
+        const paged = state.nodes.slice(page * pageSize, (page + 1) * pageSize);
+
         c.innerHTML = `
-          <div class="panel">
-            <h2>添加节点</h2>
-            <div class="form-grid">
-              <div class="field">
-                <label>节点名</label>
-                <input id="n-name" placeholder="例如 us-1" />
-              </div>
-              <div class="field">
-                <label>public_url</label>
-                <input id="n-url" placeholder="https://us.example.com" />
-              </div>
-              <div class="field">
-                <label style="display:flex;align-items:center;gap:8px;padding:9px 0;cursor:pointer;">
-                  <input type="checkbox" id="n-default" style="width:auto;" /> 默认节点
-                </label>
-              </div>
-              <div class="field">
-                <label>&nbsp;</label>
-                <button class="btn btn-primary" id="n-add">添加</button>
-              </div>
-            </div>
-          </div>
           <div class="panel">
             <div class="toolbar">
               <h2>节点列表</h2>
@@ -777,7 +784,7 @@
                     <th style="width:90px;">操作</th>
                   </tr></thead>
                   <tbody>
-                    ${state.nodes.map((n) => {
+                    ${paged.map((n) => {
                       const h = state.health[n.id] || {};
                       const editing = state.editingNode === n.id;
                       if (editing) {
@@ -826,20 +833,14 @@
                       `;
                     }).join("")}
                   </tbody>
-                </table></div>`
+                </table>${totalPages > 1 ? `<div class="pager">
+                  <button class="btn btn-ghost" id="nprev" ${page === 0 ? "disabled" : ""}>上一页</button>
+                  <span>${page + 1} / ${totalPages}</span>
+                  <button class="btn btn-ghost" id="nnext" ${page >= totalPages - 1 ? "disabled" : ""}>下一页</button>
+                </div>` : ""}</div>`
             }
           </div>
         `;
-        c.querySelector("#n-add").onclick = async () => {
-          const name = c.querySelector("#n-name").value.trim();
-          const url = c.querySelector("#n-url").value.trim();
-          const isDefault = c.querySelector("#n-default").checked;
-          try {
-            await api("/admin/api/nodes", { method: "POST", body: JSON.stringify({ name, public_url: url, is_default: isDefault }) });
-            toast("已添加节点", "ok");
-            await refreshAll();
-          } catch (e) { toast(e.message, "err"); }
-        };
         c.querySelector("#h-sync").onclick = async () => {
           try {
             const r = await api("/admin/api/sync", { method: "POST" });
@@ -849,6 +850,12 @@
             await refreshAll();
           } catch (e) { toast(e.message, "err"); }
         };
+
+        const nprev = c.querySelector("#nprev");
+        if (nprev) nprev.onclick = () => { state.nodePage--; render(); };
+        const nnext = c.querySelector("#nnext");
+        if (nnext) nnext.onclick = () => { state.nodePage++; render(); };
+
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const id = tr.dataset.id;
           const mode = tr.dataset.mode;
@@ -888,6 +895,121 @@
               render();
             };
           }
+        });
+      }
+
+
+      // ---------- 弹窗 ----------
+      function closeModal() {
+        document.getElementById("modal-root").innerHTML = "";
+      }
+      function wireModal(root) {
+        root.querySelectorAll("[data-close]").forEach((b) => (b.onclick = closeModal));
+        root.querySelector(".modal-overlay").addEventListener("mousedown", (e) => {
+          if (e.target.classList.contains("modal-overlay")) closeModal();
+        });
+      }
+      function openAddEmbyModal() {
+        const noNodes = state.nodes.length === 0;
+        const optionsHtml = state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
+        const root = document.getElementById("modal-root");
+        root.innerHTML = `
+          <div class="modal-overlay">
+            <div class="modal">
+              <div class="modal-header">
+                <h3>添加 Emby</h3>
+                <button class="btn btn-icon" data-close>✕</button>
+              </div>
+              ${noNodes
+                ? '<div class="danger-text">请先到 Nodes 页添加至少一个节点</div>'
+                : `<div class="modal-body">
+                    <div class="field">
+                      <label>emby_name <span class="hint">URL 第一段</span></label>
+                      <input id="e-name" placeholder="例如 embyA" autofocus />
+                    </div>
+                    <div class="field">
+                      <label>backend_url</label>
+                      <input id="e-backend" placeholder="http://emby.internal:8096" />
+                    </div>
+                    <div class="field">
+                      <label>节点</label>
+                      <select id="e-node">${optionsHtml}</select>
+                    </div>
+                    <p class="hint" style="margin:0;">
+                      URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
+                      307 转所选节点；不健康时随机切到其他健康节点
+                    </p>
+                    <div class="modal-footer">
+                      <button class="btn btn-ghost" data-close>取消</button>
+                      <button class="btn btn-primary" id="e-add">添加</button>
+                    </div>
+                  </div>`}
+            </div>
+          </div>
+        `;
+        wireModal(root);
+        if (!noNodes) {
+          const submit = async () => {
+            const name = root.querySelector("#e-name").value.trim();
+            const backend = root.querySelector("#e-backend").value.trim();
+            const nodeId = root.querySelector("#e-node").value;
+            try {
+              await api("/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, node_id: nodeId }) });
+              toast("已添加并推送到所有节点", "ok");
+              closeModal();
+              await refreshAll();
+            } catch (e) { toast(e.message, "err"); }
+          };
+          root.querySelector("#e-add").onclick = submit;
+          root.querySelectorAll("#e-name, #e-backend").forEach((el) => {
+            el.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+          });
+        }
+      }
+      function openAddNodeModal() {
+        const root = document.getElementById("modal-root");
+        root.innerHTML = `
+          <div class="modal-overlay">
+            <div class="modal">
+              <div class="modal-header">
+                <h3>添加节点</h3>
+                <button class="btn btn-icon" data-close>✕</button>
+              </div>
+              <div class="modal-body">
+                <div class="field">
+                  <label>节点名</label>
+                  <input id="n-name" placeholder="例如 us-1" autofocus />
+                </div>
+                <div class="field">
+                  <label>public_url</label>
+                  <input id="n-url" placeholder="https://us.example.com" />
+                </div>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+                  <input type="checkbox" id="n-default" style="width:auto;" /> 默认节点
+                </label>
+                <div class="modal-footer">
+                  <button class="btn btn-ghost" data-close>取消</button>
+                  <button class="btn btn-primary" id="n-add">添加</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        wireModal(root);
+        const submit = async () => {
+          const name = root.querySelector("#n-name").value.trim();
+          const url = root.querySelector("#n-url").value.trim();
+          const isDefault = root.querySelector("#n-default").checked;
+          try {
+            await api("/admin/api/nodes", { method: "POST", body: JSON.stringify({ name, public_url: url, is_default: isDefault }) });
+            toast("已添加节点", "ok");
+            closeModal();
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+        root.querySelector("#n-add").onclick = submit;
+        root.querySelectorAll("#n-name, #n-url").forEach((el) => {
+          el.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
         });
       }
 
