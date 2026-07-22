@@ -45,17 +45,13 @@ func (bp *BackendProber) loop() {
 
 func (bp *BackendProber) probeAll() {
 	state := bp.store.GetState()
-	proxies, _ := state["proxies"].([]any)
-	if proxies == nil {
+	proxiesRaw, ok := state["proxies"].([]ProxyEntry)
+	if !ok || len(proxiesRaw) == 0 {
 		return
 	}
-	for _, p := range proxies {
-		entry, ok := p.(map[string]any)
-		if !ok {
-			continue
-		}
-		prefix, _ := entry["path_prefix"].(string)
-		backendURL, _ := entry["backend_url"].(string)
+	for _, entry := range proxiesRaw {
+		prefix := entry.PathPrefix
+		backendURL := entry.BackendURL
 		if prefix == "" || backendURL == "" {
 			continue
 		}
