@@ -46,6 +46,7 @@ export interface PushResult {
   status: "ok" | "error";
   http_status?: number;
   error?: string | null;
+  applied_version?: number | null;
 }
 
 export interface Env {

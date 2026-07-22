@@ -257,6 +257,9 @@ export async function mergeSyncResults(
     next.nodes[r.node_id] = {
       ...prev,
       last_sync_error: r.status === "ok" ? null : (r.error ?? "sync error"),
+      ...(r.status === "ok" && r.applied_version != null
+        ? { applied_version: r.applied_version }
+        : {}),
     };
   }
   await writeHealth(env, next, latest);

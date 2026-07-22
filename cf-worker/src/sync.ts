@@ -47,10 +47,11 @@ export async function pushSnapshotToNode(
     });
     const elapsed = Date.now() - start;
     if (resp.ok) {
+      const data = await resp.json().catch(() => ({})) as { applied_version?: number };
       console.log(
-        `[sync] push ok trigger=${trigger} node=${node.id} http=${resp.status} elapsed_ms=${elapsed}`,
+        `[sync] push ok trigger=${trigger} node=${node.id} http=${resp.status} elapsed_ms=${elapsed} applied_version=${data.applied_version ?? "?"}`,
       );
-      return { node_id: node.id, status: "ok", http_status: resp.status, error: null };
+      return { node_id: node.id, status: "ok", http_status: resp.status, error: null, applied_version: data.applied_version ?? null };
     }
     const errBody = (await resp.text()).slice(0, 200);
     console.warn(

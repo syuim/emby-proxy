@@ -117,18 +117,37 @@ export async function handleUpdateNode(
 
 export async function handleDeleteNode(env: Env, id: string): Promise<Response> {
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
+  const target = nodes.nodes.find((n) => n.id === id);
+  if (!target) return json(404, { error: "节点不存在" });
+  if (target.is_default) {
+    return json(400, { error: "默认节点不可删除" });
+  }
+
+  let defaultNode = nodes.nodes.find((n) => n.is_default);
+  if (!defaultNode) {
+    defaultNode = nodes.nodes[0];
+    defaultNode.is_default = true;
+  }
+  if (defaultNode.id === id) {
+    return json(400, { error: "默认节点不可删除" });
+  }
+
   const refs = embys.embys.filter((e) => e.node_id === id);
-  if (refs.length > 0) {
-    return json(400, {
-      error: `节点被以下 emby 引用，请先解绑：${refs.map((r) => r.name).join(", ")}`,
-    });
-  }
-  const before = nodes.nodes.length;
   nodes.nodes = nodes.nodes.filter((n) => n.id !== id);
-  if (nodes.nodes.length === before) {
-    return json(404, { error: "节点不存在" });
+
+  let embysChanged = false;
+  if (refs.length > 0) {
+    for (const e of refs) e.node_id = defaultNode.id;
+    embys.version += 1;
+    embysChanged = true;
   }
+
   await writeNodes(env, nodes);
+  if (embysChanged) {
+    await writeEmbys(env, embys);
+    const push = await fanoutPush(env, embys, nodes, "delete-node");
+    return json(200, { ok: true, reassigned: refs.length, push_results: push });
+  }
   return json(200, { ok: true });
 }
 
