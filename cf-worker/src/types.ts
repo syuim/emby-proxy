@@ -51,7 +51,8 @@ export interface PushResult {
 }
 
 export interface Env {
-  EMBY_KV: KVNamespace;
+  EMBY_KV?: KVNamespace; // 保留迁移过渡期
+  EMBY_DB: D1Database;
   ADMIN_TOKEN: string;
   EMBY_SYNC_TOKEN: string;
   DIRECT_PROXY_TOKEN?: string;

@@ -4,12 +4,18 @@ compatibility_date = "2024-09-25"
 workers_dev = false
 account_id = "9a2c5f84e3346b4d2310792e4f759881"
 
-# KV 命名空间：先用 wrangler kv:namespace create EMBY_KV 创建，把 id 填回来
+# KV 命名空间（迁移到 D1 后保留只读，迁移完再删）
 [[kv_namespaces]]
 binding = "EMBY_KV"
 id = "76e2d1f5f2404afd90182676d33f4f94"
 
-# 健康检测：每 10 分钟跑一次
+# D1 数据库（强一致，取代 KV 的最终一致性）
+[[d1_databases]]
+binding = "EMBY_DB"
+database_name = "emby-proxy"
+database_id = "a4c1dbf8-e140-4612-86fe-d7e83dafc59b"
+
+# 健康检测：每 5 分钟跑一次
 [triggers]
 crons = ["*/5 * * * *"]
 

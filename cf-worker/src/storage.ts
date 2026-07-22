@@ -1,52 +1,164 @@
-import {
-  KV_KEY_NODES,
-  KV_KEY_EMBYS,
-  KV_KEY_HEALTH,
-} from "./constants";
 import type {
-  Env,
-  NodesKV,
   EmbysKV,
+  Env,
   HealthKV,
   NodeHealth,
+  NodesKV,
 } from "./types";
 
 const EMPTY_NODES: NodesKV = { nodes: [] };
 const EMPTY_EMBYS: EmbysKV = { version: 0, embys: [] };
 const EMPTY_HEALTH: HealthKV = { updated_at: "", nodes: {} };
 
+// ---------- read ----------
+
 export async function readNodes(env: Env): Promise<NodesKV> {
-  const v = await env.EMBY_KV.get<NodesKV>(KV_KEY_NODES, "json");
-  return v ?? structuredClone(EMPTY_NODES);
+  const res = await env.EMBY_DB.prepare(
+    "SELECT id, name, public_url, is_default, created_at FROM nodes ORDER BY id",
+  ).all<{
+    id: string;
+    name: string;
+    public_url: string;
+    is_default: number;
+    created_at: string;
+  }>();
+  if (!res.success || !res.results) return structuredClone(EMPTY_NODES);
+  return {
+    nodes: res.results.map((r) => ({
+      id: r.id,
+      name: r.name,
+      public_url: r.public_url,
+      is_default: r.is_default === 1,
+      created_at: r.created_at,
+    })),
+  };
 }
 
 export async function readEmbys(env: Env): Promise<EmbysKV> {
-  const v = await env.EMBY_KV.get<EmbysKV>(KV_KEY_EMBYS, "json");
-  return v ?? structuredClone(EMPTY_EMBYS);
+  const [embysRes, verRes] = await env.EMBY_DB.batch([
+    env.EMBY_DB.prepare(
+      "SELECT name, backend_url, node_id, created_at FROM embys ORDER BY name",
+    ),
+    env.EMBY_DB.prepare("SELECT version FROM config_meta WHERE id = 1"),
+  ]);
+  if (!embysRes.success || !embysRes.results) return structuredClone(EMPTY_EMBYS);
+  const version =
+    verRes.results && verRes.results.length > 0
+      ? (verRes.results[0] as { version: number }).version
+      : 0;
+  return {
+    version,
+    embys: embysRes.results.map((r: any) => ({
+      name: r.name,
+      backend_url: r.backend_url,
+      node_id: r.node_id,
+      created_at: r.created_at,
+    })),
+  };
 }
 
 export async function readHealth(env: Env): Promise<HealthKV> {
-  const v = await env.EMBY_KV.get<HealthKV>(KV_KEY_HEALTH, "json");
-  return v ?? structuredClone(EMPTY_HEALTH);
+  const res = await env.EMBY_DB.prepare(
+    "SELECT node_id, healthy, last_check, consecutive_fails, last_latency_ms, applied_version, last_sync_error, backend_latencies FROM health",
+  ).all<{
+    node_id: string;
+    healthy: number;
+    last_check: string | null;
+    consecutive_fails: number;
+    last_latency_ms: number | null;
+    applied_version: number | null;
+    last_sync_error: string | null;
+    backend_latencies: string | null;
+  }>();
+  if (!res.success || !res.results) return structuredClone(EMPTY_HEALTH);
+  const nodes: Record<string, NodeHealth> = {};
+  for (const r of res.results) {
+    let latencies: Record<string, number | null> | undefined;
+    if (r.backend_latencies) {
+      try {
+        latencies = JSON.parse(r.backend_latencies) as Record<string, number | null>;
+      } catch {
+        latencies = undefined;
+      }
+    }
+    nodes[r.node_id] = {
+      healthy: r.healthy === 1,
+      last_check: r.last_check,
+      consecutive_fails: r.consecutive_fails,
+      last_latency_ms: r.last_latency_ms,
+      applied_version: r.applied_version,
+      last_sync_error: r.last_sync_error,
+      backend_latencies: latencies,
+    };
+  }
+  return { updated_at: new Date().toISOString(), nodes };
 }
 
-export async function writeNodes(env: Env, value: NodesKV, cachedPrev?: NodesKV): Promise<void> {
-  const prev = cachedPrev ?? await readNodes(env);
-  if (nodesEqual(prev, value)) return;
-  await env.EMBY_KV.put(KV_KEY_NODES, JSON.stringify(value));
+// ---------- write ----------
+
+export async function writeNodes(
+  env: Env,
+  value: NodesKV,
+  _cachedPrev?: NodesKV,
+): Promise<void> {
+  const stmts = [env.EMBY_DB.prepare("DELETE FROM nodes")];
+  for (const n of value.nodes) {
+    stmts.push(
+      env.EMBY_DB.prepare(
+        "INSERT INTO nodes(id, name, public_url, is_default, created_at) VALUES(?,?,?,?,?)",
+      ).bind(n.id, n.name, n.public_url, n.is_default ? 1 : 0, n.created_at),
+    );
+  }
+  await env.EMBY_DB.batch(stmts);
 }
 
-export async function writeEmbys(env: Env, value: EmbysKV, cachedPrev?: EmbysKV): Promise<void> {
-  const prev = cachedPrev ?? await readEmbys(env);
-  if (embysEqual(prev, value)) return;
-  await env.EMBY_KV.put(KV_KEY_EMBYS, JSON.stringify(value));
+export async function writeEmbys(
+  env: Env,
+  value: EmbysKV,
+  _cachedPrev?: EmbysKV,
+): Promise<void> {
+  const stmts = [env.EMBY_DB.prepare("DELETE FROM embys")];
+  for (const e of value.embys) {
+    stmts.push(
+      env.EMBY_DB.prepare(
+        "INSERT INTO embys(name, backend_url, node_id, created_at) VALUES(?,?,?,?)",
+      ).bind(e.name, e.backend_url, e.node_id, e.created_at),
+    );
+  }
+  stmts.push(
+    env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
+      value.version,
+    ),
+  );
+  await env.EMBY_DB.batch(stmts);
 }
 
-export async function writeHealth(env: Env, value: HealthKV, cachedPrev?: HealthKV): Promise<void> {
-  const prev = cachedPrev ?? await readHealth(env);
-  if (healthEqual(prev, value)) return;
-  await env.EMBY_KV.put(KV_KEY_HEALTH, JSON.stringify(value));
+export async function writeHealth(
+  env: Env,
+  value: HealthKV,
+  _cachedPrev?: HealthKV,
+): Promise<void> {
+  const stmts = [env.EMBY_DB.prepare("DELETE FROM health")];
+  for (const [nodeId, h] of Object.entries(value.nodes)) {
+    stmts.push(
+      env.EMBY_DB.prepare(
+        "INSERT INTO health(node_id, healthy, last_check, consecutive_fails, last_latency_ms, applied_version, last_sync_error, backend_latencies) VALUES(?,?,?,?,?,?,?,?)",
+      ).bind(
+        nodeId,
+        h.healthy ? 1 : 0,
+        h.last_check,
+        h.consecutive_fails,
+        h.last_latency_ms,
+        h.applied_version,
+        h.last_sync_error,
+        h.backend_latencies ? JSON.stringify(h.backend_latencies) : null,
+      ),
+    );
+  }
+  await env.EMBY_DB.batch(stmts);
 }
+
+// ---------- helpers ----------
 
 export function emptyNodeHealth(): NodeHealth {
   return {
@@ -59,9 +171,7 @@ export function emptyNodeHealth(): NodeHealth {
   };
 }
 
-// ---------- 比较函数 ----------
-// 注意：last_check 与 updated_at 不参与比较，它们每次调用都会刷新，
-// 纳入比较会让"比较后写"永远判"有变化"，失去省写入的意义。
+// ---------- comparison (no longer needed for D1, kept for signature compat) ----------
 
 export function nodesEqual(a: NodesKV, b: NodesKV): boolean {
   if (a.nodes.length !== b.nodes.length) return false;
