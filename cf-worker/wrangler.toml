@@ -4,12 +4,7 @@ compatibility_date = "2024-09-25"
 workers_dev = false
 account_id = "9a2c5f84e3346b4d2310792e4f759881"
 
-# KV 命名空间（迁移到 D1 后保留只读，迁移完再删）
-[[kv_namespaces]]
-binding = "EMBY_KV"
-id = "76e2d1f5f2404afd90182676d33f4f94"
-
-# D1 数据库（强一致，取代 KV 的最终一致性）
+# D1 数据库（强一致）
 [[d1_databases]]
 binding = "EMBY_DB"
 database_name = "emby-proxy"

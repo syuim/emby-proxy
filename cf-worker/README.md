@@ -1,10 +1,10 @@
 # cf-worker — Emby Router 控制面
 
 CF Worker，承担 emby 反代的：
-1. **路由调度**：客户端访问 `https://入口域名/<emby_name>/...` → 查 KV → 选健康节点 → **307** 转发
+1. **路由调度**：客户端访问 `https://入口域名/<emby_name>/...` → 查 D1 → 选健康节点 → **307** 转发
 2. **管理 UI**：`/admin` 单页，配置 nodes / embys / 故障转移
-3. **健康检测**：cron 每 3 分钟探活节点 `/__health`
-4. **配置同步**：写 KV 后 fan-out 推到所有节点的 `/admin/sync`
+3. **健康检测**：cron 每 5 分钟探活节点 `/__health`
+4. **配置同步**：写 D1 后 fan-out 推到所有节点的 `/admin/sync`
 
 ## 架构
 
@@ -12,8 +12,8 @@ CF Worker，承担 emby 反代的：
 客户端 → entry.example.com/embyA/path
             │ (CF Worker)
             │  解析 emby_name=embyA
-            │  KV embys → node_id=n_us1
-            │  KV health → n_us1 healthy?
+            │  D1 embys → node_id=n_us1
+            │  D1 health → n_us1 healthy?
             │      不健康则从其他节点中随机选一个健康的
             ↓
        307 Location: https://us.example.com/embyA/path
@@ -38,9 +38,10 @@ emby 配置全量推送到所有节点（节点对等），Worker 只决定路�
 cd cf-worker
 npm install              # 或 pnpm install
 
-# 1. 创建 KV namespace（生产 + 预览）
-npx wrangler kv:namespace create EMBY_KV
-# 把返回的 id 填到 wrangler.toml 的 [[kv_namespaces]] id 字段
+# 1. 创建 D1 数据库并应用 migration
+npx wrangler d1 create emby-proxy
+# 把返回的 database_id 填到 wrangler.toml 的 [[d1_databases]] id 字段
+npx wrangler d1 migrations apply emby-proxy --remote
 
 # 2. 多账号用户：把 wrangler.toml 中的 account_id 改成你自己的（仓库里默认是 Suyu 账号）
 #    单账号可省略
@@ -107,7 +108,7 @@ Worker 推到节点的 `/admin/sync` payload **完全沿用旧 schema**（向后
 |---|---|---|
 | 跳转码 | 307 | 保留 method+body，Emby POST API 不丢 |
 | 节点同步 | 全量推所有节点 | 节点对等，故障转移即时生效 |
-| 故障转移 | 指定 node 不健康 → 其他节点中随机选健康的 | 不再维护主/备节点列表 |
+| 数据存储 | D1（强一致 SQLite） | 替换 KV，节点切换写后立即可见 |
 | 健康检测 | cron 每 3min + 连续 2 次失败降级 / 1 次成功恢复 | 慢降级、快恢复 |
 | 全部不健康 | fallback 到 emby 原始 node_id（不返 503） | 让客户端自己感知失败 |
 | 管理认证 | ADMIN_TOKEN + cookie/Bearer | UI cookie HttpOnly+Secure |
