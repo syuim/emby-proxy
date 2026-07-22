@@ -855,12 +855,12 @@
           } catch (e) { toast(e.message, "err"); }
         };
 
-        c.querySelector(#h-probe).onclick = async () => {
+        c.querySelector("#h-probe").onclick = async () => {
           try {
-            await api(/admin/api/probe, { method: POST });
-            toast(探测完成, ok);
+            await api("/admin/api/probe", { method: "POST" });
+            toast("探测完成", "ok");
             await refreshAll();
-          } catch (e) { toast(e.message, err); }
+          } catch (e) { toast(e.message, "err"); }
         };
 
         const nprev = c.querySelector("#nprev");
