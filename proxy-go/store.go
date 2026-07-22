@@ -54,16 +54,18 @@ type Snapshot struct {
 
 // Store holds the in-memory proxy config with thread-safe access and disk persistence.
 type Store struct {
-	mu       sync.RWMutex
-	proxies  map[string]string // prefix → backend_url
-	version  int
-	dataDir  string
+	mu               sync.RWMutex
+	proxies          map[string]string // prefix → backend_url
+	version          int
+	dataDir          string
+	backendLatencies map[string]int64 // prefix → latency_ms (updated by BackendProber)
 }
 
 func NewStore(dataDir string) *Store {
 	return &Store{
-		proxies: make(map[string]string),
-		dataDir: dataDir,
+		proxies:          make(map[string]string),
+		dataDir:          dataDir,
+		backendLatencies: make(map[string]int64),
 	}
 }
 
@@ -107,6 +109,24 @@ func (s *Store) GetBackend(prefix string) string {
 	return s.proxies[prefix]
 }
 
+// SetBackendLatency stores a latency measurement for a backend prefix.
+func (s *Store) SetBackendLatency(prefix string, latencyMs int64) {
+	s.mu.Lock()
+	s.backendLatencies[prefix] = latencyMs
+	s.mu.Unlock()
+}
+
+// GetBackendLatencies returns a copy of the current backend latency map.
+func (s *Store) GetBackendLatencies() map[string]int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]int64, len(s.backendLatencies))
+	for k, v := range s.backendLatencies {
+		out[k] = v
+	}
+	return out
+}
+
 // GetState returns the current config for /admin/status.
 func (s *Store) GetState() map[string]any {
 	s.mu.RLock()
@@ -115,9 +135,14 @@ func (s *Store) GetState() map[string]any {
 	for k, v := range s.proxies {
 		proxies = append(proxies, ProxyEntry{PathPrefix: k, BackendURL: v})
 	}
+	latencies := make(map[string]int64, len(s.backendLatencies))
+	for k, v := range s.backendLatencies {
+		latencies[k] = v
+	}
 	return map[string]any{
-		"version": s.version,
-		"proxies": proxies,
+		"version":           s.version,
+		"proxies":           proxies,
+		"backend_latencies": latencies,
 	}
 }
 
@@ -163,6 +188,7 @@ func (s *Store) ApplySnapshot(version int, proxies []ProxyEntry) SnapshotDiff {
 	}
 	s.version = version
 	s.proxies = newProxies
+		s.backendLatencies = make(map[string]int64)
 	s.mu.Unlock()
 
 	s.persist(version, filtered)

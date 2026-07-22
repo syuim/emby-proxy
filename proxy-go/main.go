@@ -35,14 +35,19 @@ func main() {
 	proxyHandler := NewProxyHandler(store)
 	adminHandler := NewAdminHandler(store, syncToken)
 
+	// 后台探测 emby backend 延迟，每分钟一次
+	prober := NewBackendProber(store, 5*time.Minute)
+	prober.Start()
+
 	mux := http.NewServeMux()
 
-	// Health check — 同时返回当前 applied_version，worker 一次 fetch 拿完
+	// Health check — 同时返回 current applied_version 和 per-backend 延迟
 	mux.HandleFunc("/__health", func(w http.ResponseWriter, r *http.Request) {
 		state := store.GetState()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":              true,
-			"applied_version": state["version"],
+			"ok":                true,
+			"applied_version":   state["version"],
+			"backend_latencies": state["backend_latencies"],
 		})
 	})
 

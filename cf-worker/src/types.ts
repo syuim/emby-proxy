@@ -29,6 +29,7 @@ export interface NodeHealth {
   last_latency_ms: number | null;
   applied_version: number | null;
   last_sync_error: string | null;
+  backend_latencies?: Record<string, number | null>;
 }
 
 export interface HealthKV {

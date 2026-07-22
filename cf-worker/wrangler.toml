@@ -11,7 +11,7 @@ id = "76e2d1f5f2404afd90182676d33f4f94"
 
 # 健康检测：每 10 分钟跑一次
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/5 * * * *"]
 
 # Secrets（用 `wrangler secret put <NAME>` 写入，不要写在这里）：
 #   ADMIN_TOKEN       管理 UI 登录与 import 接口

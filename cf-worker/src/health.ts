@@ -31,6 +31,7 @@ export interface ProbeOutcome {
   applied_version: number | null;
   // 失败降频：本周期被跳过，未真实探测
   throttled?: boolean;
+  backend_latencies?: Record<string, number | null>;
 }
 
 /**
@@ -131,16 +132,23 @@ async function probeNode(
       };
     }
 
-    // 新版本节点：/__health 直接返回 {ok, applied_version}
+    // 新版本节点：/__health 直接返回 {ok, applied_version, backend_latencies}
     // 老版本节点：返回文本 "ok"，需 fallback 到 /admin/status
     let appliedVersion: number | null = null;
+    let backendLatencies: Record<string, number | null> | undefined;
     let parsedJson = false;
     try {
       const contentType = resp.headers.get("content-type") ?? "";
       if (contentType.includes("application/json")) {
-        const data = (await resp.json()) as { applied_version?: unknown };
+        const data = (await resp.json()) as {
+          applied_version?: unknown;
+          backend_latencies?: Record<string, number | null>;
+        };
         if (typeof data.applied_version === "number") {
           appliedVersion = data.applied_version;
+        }
+        if (data.backend_latencies && typeof data.backend_latencies === "object") {
+          backendLatencies = data.backend_latencies;
         }
         parsedJson = true;
       }
@@ -168,6 +176,7 @@ async function probeNode(
       latency_ms: Date.now() - start,
       error: null,
       applied_version: appliedVersion,
+      backend_latencies: backendLatencies,
     };
   } catch (err) {
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
@@ -200,6 +209,7 @@ function mergeHealth(prev: NodeHealth, outcome: ProbeOutcome): NodeHealth {
       last_latency_ms: outcome.latency_ms,
       applied_version: outcome.applied_version ?? prev.applied_version,
       last_sync_error: prev.last_sync_error,
+      backend_latencies: outcome.backend_latencies ?? prev.backend_latencies,
     };
   }
   const fails = prev.consecutive_fails + 1;
@@ -210,6 +220,7 @@ function mergeHealth(prev: NodeHealth, outcome: ProbeOutcome): NodeHealth {
     last_latency_ms: outcome.latency_ms,
     applied_version: prev.applied_version,
     last_sync_error: outcome.error ?? prev.last_sync_error,
+    backend_latencies: prev.backend_latencies,
   };
 }
 

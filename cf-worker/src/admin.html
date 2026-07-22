@@ -607,10 +607,11 @@
               : `<div class="table-wrap"><table>
                   <thead><tr>
                     <th style="width:36px;"><input type="checkbox" id="select-all" /></th>
-                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th style="width:200px;">操作</th>
+                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th>后端延迟</th><th style="width:200px;">操作</th>
                   </tr></thead>
                   <tbody>
                     ${paged.map((e) => {
+                      const h = state.health[e.node_id] || {};
                       const editing = state.editingEmby === e.name;
                       if (editing) {
                         return `
@@ -624,6 +625,7 @@
                               </select>
                             </td>
                             <td>${healthBadge(e.node_id)}</td>
+                            <td class="mono">${h.backend_latencies?.[e.name] ?? "-"}${h.backend_latencies?.[e.name] != null ? " ms" : ""}</td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
                               <button class="btn btn-ghost" data-act="cancel">取消</button>
@@ -638,6 +640,7 @@
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
                           <td>${escapeHtml(nodeName(e.node_id))}</td>
                           <td>${healthBadge(e.node_id)}</td>
+                          <td class="mono">${h.backend_latencies?.[e.name] ?? "-"}${h.backend_latencies?.[e.name] != null ? " ms" : ""}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
                             <button class="btn btn-danger" data-act="del">删除</button>
