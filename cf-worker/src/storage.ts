@@ -16,17 +16,17 @@ const EMPTY_EMBYS: EmbysKV = { version: 0, embys: [] };
 const EMPTY_HEALTH: HealthKV = { updated_at: "", nodes: {} };
 
 export async function readNodes(env: Env): Promise<NodesKV> {
-  const v = await env.EMBY_KV.get<NodesKV>(KV_KEY_NODES, { type: "json", cacheTtl: 0 });
+  const v = await env.EMBY_KV.get<NodesKV>(KV_KEY_NODES, "json");
   return v ?? structuredClone(EMPTY_NODES);
 }
 
 export async function readEmbys(env: Env): Promise<EmbysKV> {
-  const v = await env.EMBY_KV.get<EmbysKV>(KV_KEY_EMBYS, { type: "json", cacheTtl: 0 });
+  const v = await env.EMBY_KV.get<EmbysKV>(KV_KEY_EMBYS, "json");
   return v ?? structuredClone(EMPTY_EMBYS);
 }
 
 export async function readHealth(env: Env): Promise<HealthKV> {
-  const v = await env.EMBY_KV.get<HealthKV>(KV_KEY_HEALTH, { type: "json", cacheTtl: 0 });
+  const v = await env.EMBY_KV.get<HealthKV>(KV_KEY_HEALTH, "json");
   return v ?? structuredClone(EMPTY_HEALTH);
 }
 
