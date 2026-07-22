@@ -534,6 +534,7 @@
                 <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
               </div>
               <button class="btn btn-primary" id="btn-add">${state.tab === "embys" ? "+ Emby" : "+ 节点"}</button>
+              <button class="btn btn-ghost" id="btn-probe">⟳ 探测</button>
             </div>
             <div id="tab-content"></div>
           </main>
@@ -551,6 +552,13 @@
         $app.querySelector("#btn-add").onclick = () => {
           if (state.tab === "embys") openAddEmbyModal();
           else openAddNodeModal();
+        };
+        $app.querySelector("#btn-probe").onclick = async () => {
+          try {
+            await api("/admin/api/probe", { method: "POST" });
+            toast("探测完成", "ok");
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
         };
         if (state.tab === "embys") renderEmbys();
         else if (state.tab === "nodes") renderNodes();
@@ -769,7 +777,6 @@
           <div class="panel">
             <div class="toolbar">
               <h2>节点列表</h2>
-              <button class="btn btn-ghost" id="h-probe">⟳ 探测</button>
               <button class="btn btn-ghost" id="h-sync">↑ 重推所有节点</button>
             </div>
             ${state.nodes.length === 0
@@ -851,14 +858,6 @@
             const ok = r.push_results.filter((x) => x.status === "ok").length;
             const total = r.push_results.length;
             toast(`已重推：${ok}/${total} 成功`, ok === total ? "ok" : "err");
-            await refreshAll();
-          } catch (e) { toast(e.message, "err"); }
-        };
-
-        c.querySelector("#h-probe").onclick = async () => {
-          try {
-            await api("/admin/api/probe", { method: "POST" });
-            toast("探测完成", "ok");
             await refreshAll();
           } catch (e) { toast(e.message, "err"); }
         };
