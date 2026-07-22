@@ -11,6 +11,7 @@ import {
   handleListEmbys,
   handleListNodes,
   handleManualSync,
+  handleProbe,
   handleUpdateEmby,
   handleUpdateNode,
 } from "./handlers";
@@ -72,8 +73,9 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
     if (method === "DELETE") return handleDeleteEmby(env, name);
   }
 
-  // Health & manual sync
+  // Health & manual sync & probe
   if (path === "/admin/api/health" && method === "GET") return handleHealth(env);
+  if (path === "/admin/api/probe" && method === "POST") return handleProbe(env, ctx);
   if (path === "/admin/api/sync" && method === "POST") return handleManualSync(env);
 
   return jsonError(404, "not found");

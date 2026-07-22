@@ -8,7 +8,7 @@ import {
   writeNodes,
 } from "../storage";
 import { buildSnapshot, pushSnapshotToAll } from "../sync";
-import { immediateProbe, mergeSyncResults } from "../health";
+import { immediateProbe, mergeSyncResults, runHealthCycle } from "../health";
 import type {
   EmbyRecord,
   EmbysKV,
@@ -279,6 +279,12 @@ export async function handleBatchUpdateEmbys(
 }
 
 export async function handleHealth(env: Env): Promise<Response> {
+  const health = await readHealth(env);
+  return json(200, health);
+}
+
+export async function handleProbe(env: Env, ctx: ExecutionContext): Promise<Response> {
+  await runHealthCycle(env, ctx);
   const health = await readHealth(env);
   return json(200, health);
 }
