@@ -123,29 +123,53 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
     return json(400, { error: "默认节点不可删除" });
   }
 
-  let defaultNode = nodes.nodes.find((n) => n.is_default);
-  if (!defaultNode) {
-    defaultNode = nodes.nodes[0];
-    defaultNode.is_default = true;
-  }
+  const hasDefault = nodes.nodes.some((n) => n.is_default);
+  let defaultNode = nodes.nodes.find((n) => n.is_default) ?? nodes.nodes[0];
+  defaultNode.is_default = true;
   if (defaultNode.id === id) {
     return json(400, { error: "默认节点不可删除" });
   }
 
   const refs = embys.embys.filter((e) => e.node_id === id);
-  nodes.nodes = nodes.nodes.filter((n) => n.id !== id);
+
+  // 精准 SQL 替代全表 DELETE+INSERT，避免 FK 约束冲突
+  const stmts: D1PreparedStatement[] = [
+    env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id),
+  ];
+
+  // 无默认节点时第一个节点充当默认，需持久化
+  if (!hasDefault) {
+    stmts.push(
+      env.EMBY_DB.prepare("UPDATE nodes SET is_default = 1 WHERE id = ?").bind(
+        defaultNode.id,
+      ),
+    );
+  }
 
   let embysChanged = false;
   if (refs.length > 0) {
-    for (const e of refs) e.node_id = defaultNode.id;
+    // 同批次内先解引用再删节点，FK 约束下也不会冲突
+    stmts.push(
+      env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?").bind(
+        defaultNode.id, id,
+      ),
+    );
     embys.version += 1;
+    stmts.push(
+      env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
+        embys.version,
+      ),
+    );
     embysChanged = true;
   }
 
-  await writeNodes(env, nodes);
+  await env.EMBY_DB.batch(stmts);
+
   if (embysChanged) {
-    await writeEmbys(env, embys);
-    const push = await fanoutPush(env, embys, nodes, "delete-node");
+    // fanoutPush 用最新的 embys 数据
+    const freshEmbys = await readEmbys(env);
+    nodes.nodes = nodes.nodes.filter((n) => n.id !== id);
+    const push = await fanoutPush(env, freshEmbys, nodes, "delete-node");
     return json(200, { ok: true, reassigned: refs.length, push_results: push });
   }
   return json(200, { ok: true });
