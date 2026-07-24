@@ -5,7 +5,6 @@ import {
   readNodes,
   writeEmbys,
   writeHealth,
-  writeNodes,
 } from "../storage";
 import { buildSnapshot, pushSnapshotToAll } from "../sync";
 import { immediateProbe, mergeSyncResults, runHealthCycle } from "../health";
@@ -55,7 +54,17 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionC
     created_at: new Date().toISOString(),
   };
   nodes.nodes.push(newNode);
-  await writeNodes(env, nodes);
+  // 精准 SQL 替代全表 DELETE+INSERT，避免 FK 约束冲突
+  const stmts: D1PreparedStatement[] = [];
+  if (is_default) {
+    stmts.push(env.EMBY_DB.prepare("UPDATE nodes SET is_default = 0 WHERE is_default = 1"));
+  }
+  stmts.push(
+    env.EMBY_DB.prepare(
+      "INSERT INTO nodes(id, name, public_url, is_default, created_at) VALUES(?,?,?,?,?)",
+    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.is_default ? 1 : 0, newNode.created_at),
+  );
+  await env.EMBY_DB.batch(stmts);
   // 添加节点后立即探测，写入健康状态
   const probeTask = (async () => {
     const nodeHealth = await immediateProbe(newNode, env.EMBY_SYNC_TOKEN, 3);
@@ -111,7 +120,19 @@ export async function handleUpdateNode(
     nodes.nodes.forEach((n) => { if (n.id !== id) n.is_default = false; });
   }
   if (!changed) return json(200, { ok: true, node, skipped: true });
-  await writeNodes(env, nodes);
+  // 精准 SQL 替代全表 DELETE+INSERT，避免 FK 约束冲突
+  const stmts: D1PreparedStatement[] = [];
+  if (node.is_default) {
+    stmts.push(
+      env.EMBY_DB.prepare("UPDATE nodes SET is_default = 0 WHERE is_default = 1 AND id != ?").bind(id),
+    );
+  }
+  stmts.push(
+    env.EMBY_DB.prepare(
+      "UPDATE nodes SET name = ?, public_url = ?, is_default = ? WHERE id = ?",
+    ).bind(node.name, node.public_url, node.is_default ? 1 : 0, id),
+  );
+  await env.EMBY_DB.batch(stmts);
   return json(200, { ok: true, node });
 }
 
