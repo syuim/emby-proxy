@@ -154,9 +154,7 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
   const refs = embys.embys.filter((e) => e.node_id === id);
 
   // 精准 SQL 替代全表 DELETE+INSERT，避免 FK 约束冲突
-  const stmts: D1PreparedStatement[] = [
-    env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id),
-  ];
+  const stmts: D1PreparedStatement[] = [];
 
   // 无默认节点时第一个节点充当默认，需持久化
   if (!hasDefault) {
@@ -183,6 +181,9 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
     );
     embysChanged = true;
   }
+
+  // DELETE 放最后，确保先解引用再删节点，避免 FK 约束冲突
+  stmts.push(env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id));
 
   await env.EMBY_DB.batch(stmts);
 
