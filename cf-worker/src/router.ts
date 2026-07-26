@@ -250,6 +250,11 @@ async function chooseNode(
   emby: EmbyRecord,
   nodes: NodeRecord[],
 ): Promise<NodeRecord | null> {
+  if (!emby.node_id) {
+    // 直连模式：不经过代理
+    return null;
+  }
+
   const health = await readHealth(env);
   const primary = nodes.find((n) => n.id === emby.node_id);
 

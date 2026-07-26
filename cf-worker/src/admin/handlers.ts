@@ -224,7 +224,7 @@ export async function handleUpdateEmby(
       changed = true;
     }
   }
-  if (typeof node_id === "string" && node_id) {
+  if (typeof node_id === "string") {
     if (node_id !== emby.node_id) {
       emby.node_id = node_id;
       changed = true;
@@ -266,8 +266,8 @@ export async function handleBatchUpdateEmbys(
 
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
 
-  // 验证 node_id 存在
-  if (!nodes.nodes.some((n) => n.id === node_id)) {
+  // 验证 node_id 存在（空=直连）
+  if (node_id && !nodes.nodes.some((n) => n.id === node_id)) {
     return json(400, { error: `node_id '${node_id}' 不存在` });
   }
 
@@ -378,7 +378,6 @@ function validateEmby(e: Omit<EmbyRecord, "created_at">): string | null {
   } catch {
     return "backend_url 不合法";
   }
-  if (!e.node_id) return "node_id 必填";
   return null;
 }
 
@@ -386,6 +385,7 @@ function checkNodeRefs(
   e: Omit<EmbyRecord, "created_at">,
   nodes: NodesKV,
 ): string | null {
+  if (!e.node_id) return null;
   if (!nodes.nodes.some((n) => n.id === e.node_id)) {
     return `node_id '${e.node_id}' 不存在`;
   }

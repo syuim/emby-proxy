@@ -506,6 +506,7 @@
         render();
       }
       function nodeName(id) {
+        if (!id) return "直连（无代理）";
         const n = state.nodes.find((x) => x.id === id);
         return n ? n.name : id;
       }
@@ -585,7 +586,7 @@
       // ---------- Embys ----------
       function renderEmbys() {
         const c = $app.querySelector("#tab-content");
-        const optionsHtml = state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
+        const optionsHtml = '<option value="">直连（无代理）</option>' + state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
         const pageSize = 15;
         const totalPages = Math.max(1, Math.ceil(state.embys.length / pageSize));
         state.embyPage = Math.min(state.embyPage, totalPages - 1);
@@ -622,6 +623,7 @@
                             <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
                             <td>
                               <select class="row-node">
+                                <option value="">直连（无代理）</option>
                                 ${state.nodes.map((n) => `<option value="${escapeHtml(n.id)}" ${n.id === e.node_id ? "selected" : ""}>${escapeHtml(n.name)}</option>`).join("")}
                               </select>
                             </td>
@@ -919,8 +921,7 @@
         });
       }
       function openAddEmbyModal() {
-        const noNodes = state.nodes.length === 0;
-        const optionsHtml = state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
+        const optionsHtml = '<option value="">直连（无代理）</option>' + state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
         const root = document.getElementById("modal-root");
         root.innerHTML = `
           <div class="modal-overlay">
@@ -929,51 +930,47 @@
                 <h3>添加 Emby</h3>
                 <button class="btn btn-icon" data-close>✕</button>
               </div>
-              ${noNodes
-                ? '<div class="danger-text">请先到 Nodes 页添加至少一个节点</div>'
-                : `<div class="modal-body">
-                    <div class="field">
-                      <label>emby_name <span class="hint">URL 第一段</span></label>
-                      <input id="e-name" placeholder="例如 embyA" autofocus />
-                    </div>
-                    <div class="field">
-                      <label>backend_url</label>
-                      <input id="e-backend" placeholder="http://emby.internal:8096" />
-                    </div>
-                    <div class="field">
-                      <label>节点</label>
-                      <select id="e-node">${optionsHtml}</select>
-                    </div>
-                    <p class="hint" style="margin:0;">
-                      URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
-                      307 转所选节点；不健康时随机切到其他健康节点
-                    </p>
-                    <div class="modal-footer">
-                      <button class="btn btn-ghost" data-close>取消</button>
-                      <button class="btn btn-primary" id="e-add">添加</button>
-                    </div>
-                  </div>`}
+              <div class="modal-body">
+                <div class="field">
+                  <label>emby_name <span class="hint">URL 第一段</span></label>
+                  <input id="e-name" placeholder="例如 embyA" autofocus />
+                </div>
+                <div class="field">
+                  <label>backend_url</label>
+                  <input id="e-backend" placeholder="http://emby.internal:8096" />
+                </div>
+                <div class="field">
+                  <label>节点 <span class="hint">选"直连"则不经过代理</span></label>
+                  <select id="e-node">${optionsHtml}</select>
+                </div>
+                <p class="hint" style="margin:0;">
+                  URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
+                  307 转所选节点；选直连则直接 307 到 backend_url
+                </p>
+                <div class="modal-footer">
+                  <button class="btn btn-ghost" data-close>取消</button>
+                  <button class="btn btn-primary" id="e-add">添加</button>
+                </div>
+              </div>
             </div>
           </div>
         `;
         wireModal(root);
-        if (!noNodes) {
-          const submit = async () => {
-            const name = root.querySelector("#e-name").value.trim();
-            const backend = root.querySelector("#e-backend").value.trim();
-            const nodeId = root.querySelector("#e-node").value;
-            try {
-              await api("/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, node_id: nodeId }) });
-              toast("已添加并推送到所有节点", "ok");
-              closeModal();
-              await refreshAll();
-            } catch (e) { toast(e.message, "err"); }
-          };
-          root.querySelector("#e-add").onclick = submit;
-          root.querySelectorAll("#e-name, #e-backend").forEach((el) => {
-            el.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
-          });
-        }
+        const submit = async () => {
+          const name = root.querySelector("#e-name").value.trim();
+          const backend = root.querySelector("#e-backend").value.trim();
+          const nodeId = root.querySelector("#e-node").value;
+          try {
+            await api("/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, node_id: nodeId }) });
+            toast("已添加并推送到所有节点", "ok");
+            closeModal();
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+        root.querySelector("#e-add").onclick = submit;
+        root.querySelectorAll("#e-name, #e-backend").forEach((el) => {
+          el.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+        });
       }
       function openAddNodeModal() {
         const root = document.getElementById("modal-root");
