@@ -35,9 +35,15 @@ export async function handleClientRequest(
 
   const node = await chooseNode(env, emby, nodesKV.nodes);
   if (!node) {
-    return new Response("Bad Gateway: emby has no resolvable node", {
-      status: 502,
-      headers: { "Cache-Control": "no-store" },
+    // 所有代理节点不可用 → 直连 emby backend
+    const subpath = "/" + segments.slice(1).join("/");
+    const target = buildTargetUrl(emby.backend_url, subpath, url.search);
+    if (isCacheableImageRequest(request, path)) {
+      return serveCachedImage(request, target, ctx);
+    }
+    return new Response(null, {
+      status: 307,
+      headers: { Location: target, "Cache-Control": "no-store" },
     });
   }
 
@@ -92,9 +98,9 @@ export async function handleDirectRequest(
 
   let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
   if (!emby) {
-    const defaultNode = nodesKV.nodes.find((n) => n.is_default);
-    if (!defaultNode) {
-      return new Response("Bad Gateway: no default node configured", { status: 502 });
+    const anyNode = nodesKV.nodes[0];
+    if (!anyNode) {
+      return new Response("Bad Gateway: no node available", { status: 502 });
     }
 
     const name = await generateDirectEmbyName(backendOrigin);
@@ -110,7 +116,7 @@ export async function handleDirectRequest(
       emby = {
         name,
         backend_url: backendOrigin,
-        node_id: defaultNode.id,
+        node_id: anyNode.id,
         created_at: new Date().toISOString(),
       };
       embysKV.version += 1;
@@ -128,7 +134,12 @@ export async function handleDirectRequest(
 
   const node = await chooseNode(env, emby, nodesKV.nodes);
   if (!node) {
-    return new Response("Bad Gateway: no available node", { status: 502 });
+    // 直连模式
+    const target = buildTargetUrl(emby.backend_url, subpath, url.search);
+    return new Response(null, {
+      status: 307,
+      headers: { Location: target, "Cache-Control": "no-store" },
+    });
   }
 
   const nodePath = "/" + emby.name + subpath;
@@ -257,13 +268,7 @@ async function chooseNode(
     return pick;
   }
 
-  // 全部不健康：兜底原始节点，让客户端感知失败比直接 502 强
-  if (primary) {
-    console.warn(
-      `all nodes unhealthy for emby='${emby.name}', falling back to assigned='${primary.id}'`,
-    );
-    return primary;
-  }
+  // 全部不健康：由调用方兜底直连 backend_url
   return null;
 }
 

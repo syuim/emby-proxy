@@ -2,7 +2,6 @@ export interface NodeRecord {
   id: string;
   name: string;
   public_url: string;
-  is_default?: boolean;
   created_at: string;
 }
 

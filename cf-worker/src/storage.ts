@@ -14,12 +14,11 @@ const EMPTY_HEALTH: HealthKV = { updated_at: "", nodes: {} };
 
 export async function readNodes(env: Env): Promise<NodesKV> {
   const res = await env.EMBY_DB.prepare(
-    "SELECT id, name, public_url, is_default, created_at FROM nodes ORDER BY id",
+    "SELECT id, name, public_url, created_at FROM nodes ORDER BY id",
   ).all<{
     id: string;
     name: string;
     public_url: string;
-    is_default: number;
     created_at: string;
   }>();
   if (!res.success || !res.results) return structuredClone(EMPTY_NODES);
@@ -28,7 +27,6 @@ export async function readNodes(env: Env): Promise<NodesKV> {
       id: r.id,
       name: r.name,
       public_url: r.public_url,
-      is_default: r.is_default === 1,
       created_at: r.created_at,
     })),
   };
@@ -105,8 +103,8 @@ export async function writeNodes(
   for (const n of value.nodes) {
     stmts.push(
       env.EMBY_DB.prepare(
-        "INSERT INTO nodes(id, name, public_url, is_default, created_at) VALUES(?,?,?,?,?)",
-      ).bind(n.id, n.name, n.public_url, n.is_default ? 1 : 0, n.created_at),
+        "INSERT INTO nodes(id, name, public_url, created_at) VALUES(?,?,?,?)",
+      ).bind(n.id, n.name, n.public_url, n.created_at),
     );
   }
   await env.EMBY_DB.batch(stmts);
@@ -182,7 +180,6 @@ export function nodesEqual(a: NodesKV, b: NodesKV): boolean {
       an.id !== bn.id ||
       an.name !== bn.name ||
       an.public_url !== bn.public_url ||
-      !!an.is_default !== !!bn.is_default ||
       an.created_at !== bn.created_at
     ) {
       return false;

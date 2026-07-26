@@ -28,7 +28,7 @@ export async function handleListNodes(env: Env): Promise<Response> {
 }
 
 export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionContext): Promise<Response> {
-  const { name, public_url, is_default } = req.body ?? {};
+  const { name, public_url } = req.body ?? {};
   if (typeof name !== "string" || typeof public_url !== "string") {
     return json(400, { error: "name 与 public_url 必填" });
   }
@@ -43,27 +43,18 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionC
   if (nodes.nodes.some((n) => n.public_url === trimmed.public_url)) {
     return json(400, { error: `URL '${trimmed.public_url}' 已被占用` });
   }
-  if (is_default) {
-    nodes.nodes.forEach((n) => (n.is_default = false));
-  }
   const newNode: NodeRecord = {
     id: generateNodeId(nodes),
     name: trimmed.name,
     public_url: trimmed.public_url,
-    is_default: !!is_default,
     created_at: new Date().toISOString(),
   };
   nodes.nodes.push(newNode);
-  // 精准 SQL 替代全表 DELETE+INSERT，避免 FK 约束冲突
-  const stmts: D1PreparedStatement[] = [];
-  if (is_default) {
-    stmts.push(env.EMBY_DB.prepare("UPDATE nodes SET is_default = 0 WHERE is_default = 1"));
-  }
-  stmts.push(
+  const stmts: D1PreparedStatement[] = [
     env.EMBY_DB.prepare(
-      "INSERT INTO nodes(id, name, public_url, is_default, created_at) VALUES(?,?,?,?,?)",
-    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.is_default ? 1 : 0, newNode.created_at),
-  );
+      "INSERT INTO nodes(id, name, public_url, created_at) VALUES(?,?,?,?)",
+    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.created_at),
+  ];
   await env.EMBY_DB.batch(stmts);
   // 添加节点后立即探测，写入健康状态
   const probeTask = (async () => {
@@ -89,7 +80,7 @@ export async function handleUpdateNode(
   if (!node) return json(404, { error: "节点不存在" });
 
   let changed = false;
-  const { name, public_url, is_default } = req.body ?? {};
+  const { name, public_url } = req.body ?? {};
   if (typeof name === "string" && name.trim()) {
     const v = name.trim();
     if (nodes.nodes.some((n) => n.id !== id && n.name === v)) {
@@ -112,26 +103,12 @@ export async function handleUpdateNode(
       changed = true;
     }
   }
-  if (typeof is_default === "boolean" && is_default !== node.is_default) {
-    node.is_default = is_default;
-    changed = true;
-  }
-  if (changed && node.is_default) {
-    nodes.nodes.forEach((n) => { if (n.id !== id) n.is_default = false; });
-  }
   if (!changed) return json(200, { ok: true, node, skipped: true });
-  // 精准 SQL 替代全表 DELETE+INSERT，避免 FK 约束冲突
-  const stmts: D1PreparedStatement[] = [];
-  if (node.is_default) {
-    stmts.push(
-      env.EMBY_DB.prepare("UPDATE nodes SET is_default = 0 WHERE is_default = 1 AND id != ?").bind(id),
-    );
-  }
-  stmts.push(
+  const stmts: D1PreparedStatement[] = [
     env.EMBY_DB.prepare(
-      "UPDATE nodes SET name = ?, public_url = ?, is_default = ? WHERE id = ?",
-    ).bind(node.name, node.public_url, node.is_default ? 1 : 0, id),
-  );
+      "UPDATE nodes SET name = ?, public_url = ? WHERE id = ?",
+    ).bind(node.name, node.public_url, id),
+  ];
   await env.EMBY_DB.batch(stmts);
   return json(200, { ok: true, node });
 }
@@ -140,39 +117,28 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
   const target = nodes.nodes.find((n) => n.id === id);
   if (!target) return json(404, { error: "节点不存在" });
-  if (target.is_default) {
-    return json(400, { error: "默认节点不可删除" });
-  }
 
-  const hasDefault = nodes.nodes.some((n) => n.is_default);
-  let defaultNode = nodes.nodes.find((n) => n.is_default) ?? nodes.nodes[0];
-  defaultNode.is_default = true;
-  if (defaultNode.id === id) {
-    return json(400, { error: "默认节点不可删除" });
-  }
+  const otherNodes = nodes.nodes.filter((n) => n.id !== id);
+  const fallbackNode = otherNodes[0] ?? null;
 
   const refs = embys.embys.filter((e) => e.node_id === id);
 
-  // 精准 SQL 替代全表 DELETE+INSERT，避免 FK 约束冲突
   const stmts: D1PreparedStatement[] = [];
-
-  // 无默认节点时第一个节点充当默认，需持久化
-  if (!hasDefault) {
-    stmts.push(
-      env.EMBY_DB.prepare("UPDATE nodes SET is_default = 1 WHERE id = ?").bind(
-        defaultNode.id,
-      ),
-    );
-  }
 
   let embysChanged = false;
   if (refs.length > 0) {
-    // 同批次内先解引用再删节点，FK 约束下也不会冲突
-    stmts.push(
-      env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?").bind(
-        defaultNode.id, id,
-      ),
-    );
+    if (!fallbackNode) {
+      // 没有其他节点时清空 node_id（直连模式）
+      stmts.push(
+        env.EMBY_DB.prepare("UPDATE embys SET node_id = '' WHERE node_id = ?").bind(id),
+      );
+    } else {
+      stmts.push(
+        env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?").bind(
+          fallbackNode.id, id,
+        ),
+      );
+    }
     embys.version += 1;
     stmts.push(
       env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
@@ -182,17 +148,19 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
     embysChanged = true;
   }
 
-  // DELETE 放最后，确保先解引用再删节点，避免 FK 约束冲突
   stmts.push(env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id));
 
   await env.EMBY_DB.batch(stmts);
 
   if (embysChanged) {
-    // fanoutPush 用最新的 embys 数据
     const freshEmbys = await readEmbys(env);
-    nodes.nodes = nodes.nodes.filter((n) => n.id !== id);
-    const push = await fanoutPush(env, freshEmbys, nodes, "delete-node");
-    return json(200, { ok: true, reassigned: refs.length, push_results: push });
+    pushSnapshotToAll(
+      otherNodes,
+      buildSnapshot(freshEmbys),
+      env.EMBY_SYNC_TOKEN,
+      "delete-node",
+    );
+    return json(200, { ok: true, reassigned: refs.length });
   }
   return json(200, { ok: true });
 }

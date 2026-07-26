@@ -784,7 +784,6 @@
                   <thead><tr>
                     <th>节点</th>
                     <th>public_url</th>
-                    <th>默认</th>
                     <th>状态</th>
                     <th>延迟</th>
                     <th>连续失败</th>
@@ -805,9 +804,6 @@
                               <span class="mono">${escapeHtml(n.id)}</span>
                             </div></td>
                             <td><input class="row-url mono" value="${escapeHtml(n.public_url)}" /></td>
-                            <td><label style="display:flex;align-items:center;gap:6px;white-space:nowrap;">
-                              <input type="checkbox" class="row-default" ${n.is_default ? "checked" : ""} style="width:auto;" /> 默认
-                            </label></td>
                             <td>${healthBadge(n.id)}</td>
                             <td class="mono">${h.last_latency_ms ?? "-"}${h.last_latency_ms != null ? " ms" : ""}</td>
                             <td class="mono">${h.consecutive_fails ?? 0}</td>
@@ -828,7 +824,6 @@
                             <span class="mono">${escapeHtml(n.id)}</span>
                           </div></td>
                           <td class="mono">${escapeHtml(n.public_url)}</td>
-                          <td>${n.is_default ? '<span class="badge" style="background:var(--color-accent);color:#fff;padding:2px 8px;font-size:10px;">是</span>' : ""}</td>
                           <td>${healthBadge(n.id)}</td>
                           <td class="mono">${h.last_latency_ms ?? "-"}${h.last_latency_ms != null ? " ms" : ""}</td>
                           <td class="mono">${h.consecutive_fails ?? 0}</td>
@@ -893,12 +888,11 @@
             tr.querySelector('[data-act="save"]').onclick = async () => {
               const name = $name.value.trim();
               const url = $url.value.trim();
-              const isDefault = tr.querySelector(".row-default").checked;
               if (!name || !url) { toast("名称与 public_url 不能为空", "err"); return; }
               try {
                 await api("/admin/api/nodes/" + encodeURIComponent(id), {
                   method: "PUT",
-                  body: JSON.stringify({ name, public_url: url, is_default: isDefault }),
+                  body: JSON.stringify({ name, public_url: url }),
                 });
                 toast("已保存节点", "ok");
                 state.editingNode = null;
@@ -999,9 +993,6 @@
                   <label>public_url</label>
                   <input id="n-url" placeholder="https://us.example.com" />
                 </div>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-                  <input type="checkbox" id="n-default" style="width:auto;" /> 默认节点
-                </label>
                 <div class="modal-footer">
                   <button class="btn btn-ghost" data-close>取消</button>
                   <button class="btn btn-primary" id="n-add">添加</button>
@@ -1014,9 +1005,8 @@
         const submit = async () => {
           const name = root.querySelector("#n-name").value.trim();
           const url = root.querySelector("#n-url").value.trim();
-          const isDefault = root.querySelector("#n-default").checked;
           try {
-            await api("/admin/api/nodes", { method: "POST", body: JSON.stringify({ name, public_url: url, is_default: isDefault }) });
+            await api("/admin/api/nodes", { method: "POST", body: JSON.stringify({ name, public_url: url }) });
             toast("已添加节点", "ok");
             closeModal();
             await refreshAll();
