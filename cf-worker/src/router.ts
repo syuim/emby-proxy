@@ -11,6 +11,8 @@ export async function handleClientRequest(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  void ctx; // ctx 保留，恢复图片缓存时需要
+  void serveCachedImage; // 函数保留，恢复图片缓存时需要
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -38,9 +40,10 @@ export async function handleClientRequest(
     // 所有代理节点不可用 → 直连 emby backend
     const subpath = "/" + segments.slice(1).join("/");
     const target = buildTargetUrl(emby.backend_url, subpath, url.search);
-    if (isCacheableImageRequest(request, path)) {
-      return serveCachedImage(request, target, ctx);
-    }
+    // 图片缓存已注释，图片/视频统一走 307 节点代理
+    // if (isCacheableImageRequest(request, path)) {
+    //   return serveCachedImage(request, target, ctx);
+    // }
     return new Response(null, {
       status: 307,
       headers: { Location: target, "Cache-Control": "no-store" },
@@ -49,9 +52,10 @@ export async function handleClientRequest(
 
   const target = buildTargetUrl(node.public_url, path, url.search);
 
-  if (isCacheableImageRequest(request, path)) {
-    return serveCachedImage(request, target, ctx);
-  }
+  // 图片缓存已注释，图片/视频统一走 307 节点代理
+  // if (isCacheableImageRequest(request, path)) {
+  //   return serveCachedImage(request, target, ctx);
+  // }
 
   return new Response(null, {
     status: 307,
