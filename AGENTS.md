@@ -63,9 +63,9 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 
 本地 dev：`cf-worker/.dev.vars`（已 gitignore），与生产 secrets 完全独立。
 
-## 图片缓存
+## 图片缓存（已禁用）
 
-客户端请求路径匹配 `/Images/` 且为 GET、无 `Range` 头时，Worker 不走 307，而是直接代理上游并写入 Cloudflare Cache，缓存 7 天（stale-while-revalidate 1 天）。鉴权参数（`api_key`、`X-Emby-Token`、`X-MediaBrowser-Token`）在缓存 key 中被剔除。
+图片缓存功能已注释禁用，图片/视频统一走节点 307 代理。代码保留在 `router.ts` 中，仅注释掉调用点，恢复只需取消注释两处 `isCacheableImageRequest`/`serveCachedImage` 调用。
 
 ## 部署
 
