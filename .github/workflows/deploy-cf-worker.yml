@@ -30,6 +30,14 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cf-worker
+          command: d1 migrations apply emby-proxy --remote
+
       - name: Deploy via wrangler
         uses: cloudflare/wrangler-action@v3
         with:

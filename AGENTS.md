@@ -27,6 +27,12 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 - `path_prefix` 是历史名字，对应 worker 内部 `emby_name`，**字段名不能动**
 - 鉴权：`Authorization: Bearer $EMBY_SYNC_TOKEN`
 
+## D1 schema 约束（不可回退）
+
+`embys.node_id` **不能加 `FOREIGN KEY REFERENCES nodes(id)`**。直连模式用 `node_id = ''` 表示「不经过代理」，`''` 非 NULL 所以外键会照常校验且匹配不到任何节点 → 任何写入直连 emby 的操作都会 `FOREIGN KEY constraint failed`。该外键已由 `0002_embys_drop_node_fk.sql` 移除，节点引用的有效性改由应用层保证（`checkNodeRefs` 校验存在性，删节点时先解引用）。
+
+改 emby 字段请用**定向 `UPDATE`**，不要走整表 DELETE + 重插：后者是单个事务，任意一行写入失败会静默回滚掉全部改动。
+
 ## 保留路径与命名规则
 
 不能作为 `emby_name` 的保留字：`admin / api / health / __health / favicon.ico / robots.txt / .well-known / _`。
@@ -70,6 +76,7 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 ## 部署
 
 - **CF Worker**：`cf-worker/**` 做完改动后 → 提交到当前分支 → 合并到 `main` 推送，触发 GitHub Actions 自动部署。直接说"部署"或"合并到 main"即可，不需要问。
+- **D1 migration**：CI 在 deploy 前会跑 `wrangler d1 migrations apply emby-proxy --remote`，新增 migration 只需把 `.sql` 放进 `cf-worker/migrations/` 并提交。注意 migration 需可重复执行安全（用 `IF NOT EXISTS` 等）。
 - **Go 节点**：使用 `Agent` 调用 `ops` subagent 执行，机器信息以 ops agent 为准。
 
 ### 部署后验证

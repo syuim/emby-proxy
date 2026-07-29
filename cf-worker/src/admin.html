@@ -337,8 +337,11 @@
         box-shadow: var(--shadow-lg);
         animation: toast-in 0.25s ease-out;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 8px;
+        max-width: min(420px, calc(100vw - 48px));
+        white-space: pre-line;
+        line-height: 1.5;
       }
       .toast.ok { color: var(--color-success); }
       .toast.err { color: var(--color-danger); }
@@ -346,6 +349,8 @@
         content: "";
         width: 8px;
         height: 8px;
+        margin-top: 6px;
+        flex: 0 0 auto;
         border-radius: 50%;
         background: currentColor;
       }
@@ -546,6 +551,15 @@
 
         .table-wrap-embys:not(.editing) th:nth-child(3),
         .table-wrap-embys:not(.editing) td:nth-child(3) { display: none; }
+
+        .toast {
+          left: 12px;
+          right: 12px;
+          bottom: 12px;
+          max-width: none;
+          font-size: 12px;
+          padding: 10px 14px;
+        }
       }
     </style>
   </head>
@@ -579,12 +593,12 @@
       });
 
       // ---------- 通用 ----------
-      function toast(msg, type) {
+      function toast(msg, type, ms) {
         const el = document.createElement("div");
         el.className = "toast " + (type === "err" ? "err" : "ok");
         el.textContent = msg;
         document.body.appendChild(el);
-        setTimeout(() => el.remove(), 3500);
+        setTimeout(() => el.remove(), ms || 3500);
       }
       function escapeHtml(s) {
         return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -629,6 +643,56 @@
         if (!h) return '<span class="badge unknown">未检测</span>';
         if (h.healthy) return '<span class="badge ok">健康</span>';
         return '<span class="badge bad">异常</span>';
+      }
+
+      // 移动端隐藏了「延迟」「最近同步错误」列，明细改由 toast 承载
+      function clip(s, n) {
+        const v = String(s ?? "");
+        return v.length > n ? v.slice(0, n) + "…" : v;
+      }
+      async function probeAndReport() {
+        try {
+          const h = await api("/admin/api/probe", { method: "POST" });
+          await refreshAll();
+          const entries = Object.entries(h.nodes || {});
+          if (entries.length === 0) {
+            toast("探测完成：暂无节点", "ok");
+            return;
+          }
+          const bad = entries.filter(([, v]) => !v.healthy);
+          const lines = entries.map(([id, v]) =>
+            `· ${nodeName(id)}：${v.healthy ? (v.last_latency_ms != null ? v.last_latency_ms + " ms" : "健康") : "异常"}`,
+          );
+          toast(
+            `探测完成 ${entries.length - bad.length}/${entries.length} 健康\n` + lines.join("\n"),
+            bad.length > 0 ? "err" : "ok",
+            bad.length > 0 ? 8000 : 5000,
+          );
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      }
+      async function resyncAndReport() {
+        try {
+          const r = await api("/admin/api/sync", { method: "POST" });
+          await refreshAll();
+          const results = r.push_results || [];
+          const failed = results.filter((x) => x.status !== "ok");
+          if (failed.length === 0) {
+            toast(`已重推：${results.length}/${results.length} 成功`, "ok");
+            return;
+          }
+          const lines = failed.map(
+            (f) => `· ${nodeName(f.node_id)}：${clip(f.error || "未知错误", 120)}`,
+          );
+          toast(
+            `重推失败 ${failed.length}/${results.length}\n` + lines.join("\n"),
+            "err",
+            10000,
+          );
+        } catch (e) {
+          toast(e.message, "err");
+        }
       }
 
       // ---------- 顶层 ----------
@@ -780,10 +844,7 @@
         const enext = c.querySelector("#enext");
         if (enext) enext.onclick = () => { state.embyPage++; render(); };
 
-        c.querySelector("#e-probe").onclick = async () => {
-          try { await api("/admin/api/probe", { method: "POST" }); toast("探测完成", "ok"); await refreshAll(); }
-          catch (e) { toast(e.message, "err"); }
-        };
+        c.querySelector("#e-probe").onclick = probeAndReport;
 
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const name = tr.dataset.name;
@@ -962,20 +1023,8 @@
             }
           </div>
         `;
-        c.querySelector("#h-sync").onclick = async () => {
-          try {
-            const r = await api("/admin/api/sync", { method: "POST" });
-            const ok = r.push_results.filter((x) => x.status === "ok").length;
-            const total = r.push_results.length;
-            toast(`已重推：${ok}/${total} 成功`, ok === total ? "ok" : "err");
-            await refreshAll();
-          } catch (e) { toast(e.message, "err"); }
-        };
-
-        c.querySelector("#n-probe").onclick = async () => {
-          try { await api("/admin/api/probe", { method: "POST" }); toast("探测完成", "ok"); await refreshAll(); }
-          catch (e) { toast(e.message, "err"); }
-        };
+        c.querySelector("#h-sync").onclick = resyncAndReport;
+        c.querySelector("#n-probe").onclick = probeAndReport;
 
         const nprev = c.querySelector("#nprev");
         if (nprev) nprev.onclick = () => { state.nodePage--; render(); };

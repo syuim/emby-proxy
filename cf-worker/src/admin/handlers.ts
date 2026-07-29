@@ -272,24 +272,44 @@ export async function handleBatchUpdateEmbys(
   }
 
   // 批量更新
-  let changed = 0;
+  const changedNames: string[] = [];
   for (const name of names) {
     const emby = embys.embys.find((e) => e.name === name);
     if (!emby) return json(400, { error: `emby '${name}' 不存在` });
     if (emby.node_id !== node_id) {
       emby.node_id = node_id;
-      changed++;
+      changedNames.push(name);
     }
   }
 
-  if (changed === 0) {
+  if (changedNames.length === 0) {
     return json(200, { ok: true, skipped: true, changed: 0 });
   }
 
   embys.version += 1;
-  await writeEmbys(env, embys);
+
+  // 定向 UPDATE 只改动到的行。D1 单条语句上限 100 个绑定参数，故按 90 分片，
+  // 同一 batch 仍是一个事务。
+  const CHUNK = 90;
+  const stmts: D1PreparedStatement[] = [];
+  for (let i = 0; i < changedNames.length; i += CHUNK) {
+    const slice = changedNames.slice(i, i + CHUNK);
+    const placeholders = slice.map(() => "?").join(",");
+    stmts.push(
+      env.EMBY_DB.prepare(
+        `UPDATE embys SET node_id = ? WHERE name IN (${placeholders})`,
+      ).bind(node_id, ...slice),
+    );
+  }
+  stmts.push(
+    env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
+      embys.version,
+    ),
+  );
+  await env.EMBY_DB.batch(stmts);
+
   const push = await fanoutPush(env, embys, nodes, "batch-update-embys");
-  return json(200, { ok: true, changed, push_results: push });
+  return json(200, { ok: true, changed: changedNames.length, push_results: push });
 }
 
 export async function handleHealth(env: Env): Promise<Response> {
