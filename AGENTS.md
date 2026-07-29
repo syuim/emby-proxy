@@ -76,7 +76,7 @@ emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健
 ## 部署
 
 - **CF Worker**：`cf-worker/**` 做完改动后 → 提交到当前分支 → 合并到 `main` 推送，触发 GitHub Actions 自动部署。直接说"部署"或"合并到 main"即可，不需要问。
-- **D1 migration**：CI 在 deploy 前会跑 `wrangler d1 migrations apply emby-proxy --remote`，新增 migration 只需把 `.sql` 放进 `cf-worker/migrations/` 并提交。注意 migration 需可重复执行安全（用 `IF NOT EXISTS` 等）。
+- **D1 migration**：**CI 不跑 migration**（`CLOUDFLARE_API_TOKEN` 无 D1 权限，加进 CI 会连带阻塞 deploy）。新增 `.sql` 后需本地执行一次：`cd cf-worker && npx wrangler login && npx wrangler d1 migrations apply emby-proxy --remote`。
 - **Go 节点**：使用 `Agent` 调用 `ops` subagent 执行，机器信息以 ops agent 为准。
 
 ### 部署后验证
