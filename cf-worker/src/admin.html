@@ -266,6 +266,8 @@
         transition: border-color 0.15s, box-shadow 0.15s;
         width: 100%;
       }
+      /* iOS 16+ 的 select 弹层会继承 option 字号，移动端 11px 会缩成不可读的小字 */
+      option { font-size: 16px; }
       input:focus, select:focus, textarea:focus {
         outline: none;
         border-color: var(--color-text);
