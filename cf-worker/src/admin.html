@@ -275,6 +275,7 @@
       /* ============ Table ============ */
       .table-wrap {
         overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
         border: 1px solid var(--color-border);
         border-radius: var(--radius);
         background: var(--color-surface);
@@ -441,6 +442,8 @@
       .stack-name { display: flex; flex-direction: column; gap: 2px; }
       .stack-name strong { font-weight: 600; letter-spacing: -0.01em; }
       td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .only-sm { display: none; }
+      .col-actions { width: 160px; }
 
       /* ============ Responsive ============ */
       @media (max-width: 768px) {
@@ -458,7 +461,7 @@
 
         .tabs-row { flex-wrap: wrap; gap: 8px; }
 
-        th, td { padding: 8px 10px; }
+        th, td { padding: 8px 10px; white-space: nowrap; }
         thead th { font-size: 10px; }
 
         .modal { padding: 20px; }
@@ -476,6 +479,18 @@
         .table-wrap-nodes th:nth-child(8),
         .table-wrap-nodes td:nth-child(8) { display: none; }
 
+        .table-wrap-embys th:nth-child(6),
+        .table-wrap-embys td:nth-child(6) { display: none; }
+
+        .col-actions { width: auto; }
+        th:last-child, td:last-child {
+          position: sticky;
+          right: 0;
+          background: var(--color-surface);
+          box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.18);
+        }
+        thead th:last-child { background: var(--color-surface-2); }
+
         .badge { font-size: 10px; padding: 2px 7px; }
       }
 
@@ -483,7 +498,9 @@
         header { padding: 8px 10px; gap: 6px; }
         header h1 { font-size: 13px; }
         header .btn-icon { padding: 5px 8px; font-size: 11px; }
-        .stats { font-size: 9px; padding: 2px 6px; }
+        .stats { display: none; }
+        .hide-sm { display: none; }
+        .only-sm { display: inline; }
 
         main { padding: 10px; }
         .panel { padding: 12px; border-radius: var(--radius); }
@@ -491,8 +508,11 @@
         .tabs { padding: 2px; }
         .tabs button { padding: 5px 10px; font-size: 11px; }
 
-        th, td { padding: 5px 6px; font-size: 10px; }
+        th, td { padding: 5px 5px; font-size: 10px; }
         thead th { font-size: 9px; }
+        .badge::before { display: none; }
+        .badge { padding: 2px 6px; }
+        td.actions { gap: 4px; }
 
         .btn { font-size: 11px; padding: 6px 8px; }
         .btn-primary { padding: 7px 10px; font-size: 11px; }
@@ -513,7 +533,9 @@
         input, select { font-size: 11px; padding: 6px 8px; }
 
         .stack-name strong { font-size: 11px; }
-        .stack-name .mono { font-size: 8px; }
+        .stack-name .mono { display: none; }
+        td.mono { max-width: 120px; }
+        td.actions { flex-wrap: nowrap; }
 
         .hint { font-size: 10px; }
         .empty { padding: 32px 12px; font-size: 11px; }
@@ -521,6 +543,9 @@
         .table-wrap { border-radius: var(--radius-sm); }
         .table-wrap-nodes th:nth-child(4),
         .table-wrap-nodes td:nth-child(4) { display: none; }
+
+        .table-wrap-embys:not(.editing) th:nth-child(3),
+        .table-wrap-embys:not(.editing) td:nth-child(3) { display: none; }
       }
     </style>
   </head>
@@ -544,7 +569,9 @@
         return cur === "auto" ? "light" : cur === "light" ? "dark" : "auto";
       }
       function themeIcon(mode) {
-        return mode === "auto" ? "🖥 系统" : mode === "light" ? "☀️ 浅色" : "🌙 深色";
+        const label = mode === "auto" ? "系统" : mode === "light" ? "浅色" : "深色";
+        const icon = mode === "auto" ? "🖥" : mode === "light" ? "☀️" : "🌙";
+        return `${icon}<span class="hide-sm"> ${label}</span>`;
       }
       applyTheme(localStorage.getItem("emby-router-theme") || "auto");
       matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -593,6 +620,10 @@
         const n = state.nodes.find((x) => x.id === id);
         return n ? n.name : id;
       }
+      function nodeLabel(id) {
+        if (!id) return '直连<span class="hide-sm">（无代理）</span>';
+        return escapeHtml(nodeName(id));
+      }
       function healthBadge(nodeId) {
         const h = state.health[nodeId];
         if (!h) return '<span class="badge unknown">未检测</span>';
@@ -608,7 +639,7 @@
             <h1>🎬 Emby Router</h1>
             <span class="stats">embys ${state.embys.length} · nodes ${state.nodes.length}</span>
             <button class="btn btn-icon" id="btn-theme">${themeIcon(state.theme)}</button>
-            <button class="btn btn-icon" id="btn-refresh">↻ 刷新</button>
+            <button class="btn btn-icon" id="btn-refresh">↻<span class="hide-sm"> 刷新</span></button>
             <button class="btn btn-icon" id="btn-logout">登出</button>
           </header>
           <main>
@@ -689,10 +720,10 @@
             </div>
             ${state.embys.length === 0
               ? '<div class="empty"><div class="empty-icon">📭</div>还没有 emby 配置</div>'
-              : `<div class="table-wrap"><table>
+              : `<div class="table-wrap table-wrap-embys ${state.editingEmby ? "editing" : ""}"><table>
                   <thead><tr>
                     <th style="width:36px;"><input type="checkbox" id="select-all" /></th>
-                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th>后端延迟</th><th style="width:200px;">操作</th>
+                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th>后端延迟</th><th class="col-actions">操作</th>
                   </tr></thead>
                   <tbody>
                     ${paged.map((e) => {
@@ -724,7 +755,7 @@
                           <td><input type="checkbox" class="row-select" data-name="${escapeHtml(e.name)}" /></td>
                           <td><strong>${escapeHtml(e.name)}</strong></td>
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
-                          <td>${escapeHtml(nodeName(e.node_id))}</td>
+                          <td>${nodeLabel(e.node_id)}</td>
                           <td>${healthBadge(e.node_id)}</td>
                           <td class="mono">${h.backend_latencies?.[e.name] ?? "-"}${h.backend_latencies?.[e.name] != null ? " ms" : ""}</td>
                           <td class="actions">
@@ -861,7 +892,7 @@
             <div class="toolbar">
               <h2>节点列表</h2>
               <button class="btn btn-ghost" id="n-probe">⟳ 探测</button>
-              <button class="btn btn-ghost" id="h-sync">↑ 重推所有节点</button>
+              <button class="btn btn-ghost" id="h-sync"><span class="hide-sm">↑ 重推所有节点</span><span class="only-sm">↑ 重推</span></button>
             </div>
             ${state.nodes.length === 0
               ? '<div class="empty"><div class="empty-icon">🖧</div>还没有节点</div>'
@@ -875,7 +906,7 @@
                     <th>已应用 version</th>
                     <th>最近同步错误</th>
                     <th>最近检测</th>
-                    <th style="width:90px;">操作</th>
+                    <th class="col-actions">操作</th>
                   </tr></thead>
                   <tbody>
                     ${paged.map((n) => {
