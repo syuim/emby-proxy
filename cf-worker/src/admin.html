@@ -148,6 +148,12 @@
         white-space: nowrap;
       }
       .btn:active { transform: translateY(1px); }
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        filter: none;
+      }
+      .btn:disabled:active { transform: none; }
       .btn-icon {
         background: var(--color-surface);
         border-color: var(--color-border);
@@ -764,7 +770,11 @@
       // ---------- Embys ----------
       function renderEmbys() {
         const c = $app.querySelector("#tab-content");
-        const optionsHtml = '<option value="">直连（无代理）</option>' + state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
+        // 直连的真实值是 ""，没法同时当占位符，故用 __unset 哨兵值避免误选中直连
+        const batchOptionsHtml =
+          '<option value="__unset" selected>请选择节点…</option>' +
+          '<option value="">直连（无代理）</option>' +
+          state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
         const pageSize = 15;
         const totalPages = Math.max(1, Math.ceil(state.embys.length / pageSize));
         state.embyPage = Math.min(state.embyPage, totalPages - 1);
@@ -778,8 +788,8 @@
               <button class="btn btn-ghost" id="e-probe">⟳ 探测</button>
               <div id="batch-toolbar" class="actions" style="display:none;">
                 <span class="hint" id="batch-count">已选 0 项</span>
-                <select id="batch-node" style="width:auto;">${optionsHtml}</select>
-                <button class="btn btn-primary" id="btn-batch">批量调整节点</button>
+                <select id="batch-node" style="width:auto;">${batchOptionsHtml}</select>
+                <button class="btn btn-primary" id="btn-batch" disabled>批量调整节点</button>
               </div>
             </div>
             ${state.embys.length === 0
@@ -918,19 +928,25 @@
         });
 
         const batchBtn = c.querySelector("#btn-batch");
-        if (batchBtn) {
+        const batchNode = c.querySelector("#batch-node");
+        if (batchBtn && batchNode) {
+          batchNode.onchange = () => {
+            batchBtn.disabled = batchNode.value === "__unset";
+          };
           batchBtn.onclick = async () => {
             const checked = c.querySelectorAll(".row-select:checked");
             const names = Array.from(checked).map(cb => cb.dataset.name);
-            const nodeId = c.querySelector("#batch-node").value;
+            const nodeId = batchNode.value;
             if (names.length === 0) { toast("请至少选择一个 emby", "err"); return; }
-            if (!confirm(`将 ${names.length} 个 emby 的节点统一调整？`)) return;
+            if (nodeId === "__unset") { toast("请先选择目标节点", "err"); return; }
+            const target = nodeId === "" ? "直连（无代理）" : nodeName(nodeId);
+            if (!confirm(`将 ${names.length} 个 emby 调整到「${target}」？`)) return;
             try {
               await api("/admin/api/embys", {
                 method: "PUT",
                 body: JSON.stringify({ names, node_id: nodeId }),
               });
-              toast(`已更新 ${names.length} 个 emby 并推送到所有节点`, "ok");
+              toast(`已将 ${names.length} 个 emby 调整到「${target}」并推送到所有节点`, "ok");
               await refreshAll();
             } catch (e) { toast(e.message, "err"); }
           };

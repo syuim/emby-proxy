@@ -30,6 +30,17 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      # d1 migrations 子命令不读 wrangler.toml 的 account_id，多账号下必须显式给环境变量
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cf-worker
+          command: d1 migrations apply emby-proxy --remote
+
       - name: Deploy via wrangler
         uses: cloudflare/wrangler-action@v3
         with:
