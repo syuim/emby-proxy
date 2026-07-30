@@ -82,7 +82,7 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ## 部署
 
-- **CF Worker**：`cf-worker/**` 做完改动后 → 提交到当前分支 → 合并到 `main` 推送，触发 GitHub Actions 自动部署。直接说"部署"或"合并到 main"即可，不需要问。
+- **CF Worker**：CF 已关联本 GitHub 仓库（Git 集成）——`cf-worker/**` 做完改动后 → 提交合并到 `main` 推送 GitHub，**CF 自动触发构建部署**，无需手动 `wrangler deploy`。直接说"部署"或"合并到 main"即可，不需要问。
 - **D1 migration**：**CI 不跑 migration**，需本地执行：
   ```bash
   cd cf-worker && CLOUDFLARE_ACCOUNT_ID=9a2c5f84e3346b4d2310792e4f759881 npx wrangler d1 migrations apply emby-proxy --remote
@@ -94,7 +94,7 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ### 部署后验证
 
-1. **CF Worker**：`gh run list --branch main --limit 1 --json conclusion,displayTitle` → 确认 `conclusion` 为 `"success"`
+1. **CF Worker**：`cd cf-worker && npx wrangler deployments list | head -20` → 确认最新 deployment 时间与本次推送吻合（CF Git 集成自动构建）
 2. **Go 节点**：`curl -s http://<host>:8080/__health` → 确认返回 `{"ok":true,...}`；`docker logs --tail 5 <container>` → 确认无启动错误
 3. **Direct Proxy**（如已设置 `DIRECT_PROXY_TOKEN`）：`curl -s -o /dev/null -w "%{http_code}" https://<worker>/{token}/https://example.com` → 返回 `307`
 4. **面板验证**：`https://<worker>/admin` → 节点列表应有"默认"标记，新增 emby 记录
