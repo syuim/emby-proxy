@@ -680,6 +680,35 @@
           toast(e.message, "err");
         }
       }
+      // emby 页探测：报告节点 → emby 后端的 TCP 延迟（backend_latencies），
+      // 与节点页的节点健康探测区分开
+      async function probeEmbysAndReport() {
+        try {
+          const h = await api("/admin/api/probe", { method: "POST" });
+          await refreshAll();
+          if (state.embys.length === 0) {
+            toast("探测完成：暂无 emby", "ok");
+            return;
+          }
+          let badCount = 0;
+          const lines = state.embys.map((e) => {
+            if (!e.node_id) return `· ${e.name}：直连（不经节点）`;
+            const ms = (h.nodes?.[e.node_id]?.backend_latencies || {})[e.name];
+            if (ms == null || ms < 0) {
+              badCount++;
+              return `· ${e.name}：不可达`;
+            }
+            return `· ${e.name}：${ms} ms`;
+          });
+          toast(
+            "节点 → 后端延迟\n" + lines.join("\n"),
+            badCount > 0 ? "err" : "ok",
+            badCount > 0 ? 10000 : 6000,
+          );
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      }
       async function resyncAndReport() {
         try {
           const r = await api("/admin/api/sync", { method: "POST" });
@@ -856,7 +885,7 @@
         const enext = c.querySelector("#enext");
         if (enext) enext.onclick = () => { state.embyPage++; render(); };
 
-        c.querySelector("#e-probe").onclick = probeAndReport;
+        c.querySelector("#e-probe").onclick = probeEmbysAndReport;
 
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const name = tr.dataset.name;
