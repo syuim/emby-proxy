@@ -88,9 +88,44 @@ export async function runHealthCycle(
   }
   await writeHealth(env, newHealth, prevHealth);
 
+  // 恢复机制：原始配置节点恢复健康 → 把故障转移出去的 emby 切回 home_node_id
+  ctx.waitUntil(restoreRecoveredEmbys(env, embysKV, newHealth));
+
   // 补齐：节点 applied_version 与 KV embys.version 不一致（或未知）时异步补推
   ctx.waitUntil(
     backfillOutdatedNodes(env, embysKV, outcomes, newHealth),
+  );
+}
+
+/**
+ * 故障恢复切回：emby 的 node_id 因故障转移偏离 home_node_id（可能经过多次转移），
+ * 只要原始配置节点恢复健康，就一次性切回 home_node_id，而非上一次的临时节点。
+ */
+async function restoreRecoveredEmbys(
+  env: Env,
+  embysKV: EmbysKV,
+  health: HealthKV,
+): Promise<void> {
+  const recoveredHomeIds = new Set(
+    embysKV.embys
+      .filter(
+        (e) =>
+          e.home_node_id &&
+          e.node_id !== e.home_node_id &&
+          health.nodes[e.home_node_id]?.healthy,
+      )
+      .map((e) => e.home_node_id),
+  );
+  if (recoveredHomeIds.size === 0) return;
+
+  const stmts = [...recoveredHomeIds].map((id) =>
+    env.EMBY_DB.prepare(
+      "UPDATE embys SET node_id = home_node_id WHERE home_node_id = ? AND node_id != home_node_id",
+    ).bind(id),
+  );
+  await env.EMBY_DB.batch(stmts);
+  console.log(
+    `[failback] restored embys to recovered home nodes: ${[...recoveredHomeIds].join(",")}`,
   );
 }
 

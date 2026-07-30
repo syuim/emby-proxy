@@ -35,7 +35,7 @@ export async function readNodes(env: Env): Promise<NodesKV> {
 export async function readEmbys(env: Env): Promise<EmbysKV> {
   const [embysRes, verRes] = await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(
-      "SELECT name, backend_url, node_id, created_at FROM embys ORDER BY name",
+      "SELECT name, backend_url, node_id, home_node_id, created_at FROM embys ORDER BY name",
     ),
     env.EMBY_DB.prepare("SELECT version FROM config_meta WHERE id = 1"),
   ]);
@@ -50,6 +50,7 @@ export async function readEmbys(env: Env): Promise<EmbysKV> {
       name: r.name,
       backend_url: r.backend_url,
       node_id: r.node_id,
+      home_node_id: r.home_node_id ?? "",
       created_at: r.created_at,
     })),
   };
@@ -119,8 +120,8 @@ export async function writeEmbys(
   for (const e of value.embys) {
     stmts.push(
       env.EMBY_DB.prepare(
-        "INSERT INTO embys(name, backend_url, node_id, created_at) VALUES(?,?,?,?)",
-      ).bind(e.name, e.backend_url, e.node_id, e.created_at),
+        "INSERT INTO embys(name, backend_url, node_id, home_node_id, created_at) VALUES(?,?,?,?,?)",
+      ).bind(e.name, e.backend_url, e.node_id, e.home_node_id, e.created_at),
     );
   }
   stmts.push(

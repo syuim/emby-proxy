@@ -41,7 +41,14 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ## 故障转移行为
 
-emby 指定的 `node_id` 不健康 → router 从其他节点中**随机**挑健康的 → 全不健康兜底原 `node_id`（不返 503）。健康检测：cron 每 10 分钟探活，连续 2 次失败降级 / 1 次成功恢复。
+`embys` 有两个节点字段：`node_id` = 当前生效节点（故障转移会改写），`home_node_id` = 原始配置节点（只有显式改配置才更新，是恢复切回的目标）。
+
+- **转移（sticky）**：emby 的 `node_id` 不健康 → router 从其他节点中**随机**挑健康的，并把该不健康节点关联的**所有 emby** 的 `node_id` 定向 UPDATE 为新节点（`home_node_id` 不动），后续请求直接命中新节点。转移可能连锁发生多次。
+- **兜底**：全部节点不健康 → 307 直连 emby 的 `backend_url`（不返 503）。
+- **恢复（failback）**：探活周期发现 `home_node_id` 节点恢复健康 → 把 `node_id != home_node_id` 的 emby 一次性切回 `home_node_id`。多次转移后仍恢复到**原始配置节点**，而非上一次的临时节点。
+- 管理端显式设置节点（add/update/batch）会同时写 `node_id` 与 `home_node_id`，即重置故障转移状态。
+
+健康检测：cron 每 10 分钟探活，连续 2 次失败降级 / 1 次成功恢复。
 
 探活降频：节点连续失败 ≥5 次后，30 分钟内只真实探测一次，避免反复打已知死节点。探测成功后若节点 `applied_version` 落后 KV，会异步补推一次配置。
 

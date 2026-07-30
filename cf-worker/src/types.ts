@@ -12,7 +12,10 @@ export interface NodesKV {
 export interface EmbyRecord {
   name: string;
   backend_url: string;
+  // 当前生效节点（故障转移时会被改写）
   node_id: string;
+  // 原始配置节点（恢复机制的切回目标，仅显式配置时更新）
+  home_node_id: string;
   created_at: string;
 }
 

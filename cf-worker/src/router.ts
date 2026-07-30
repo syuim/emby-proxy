@@ -11,7 +11,6 @@ export async function handleClientRequest(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  void ctx; // ctx 保留，恢复图片缓存时需要
   void serveCachedImage; // 函数保留，恢复图片缓存时需要
   const url = new URL(request.url);
   const path = url.pathname;
@@ -35,7 +34,7 @@ export async function handleClientRequest(
     return notFound(`unknown emby '${embyName}'`);
   }
 
-  const node = await chooseNode(env, emby, nodesKV.nodes);
+  const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
   if (!node) {
     // 所有代理节点不可用 → 直连 emby backend
     const subpath = "/" + segments.slice(1).join("/");
@@ -121,6 +120,7 @@ export async function handleDirectRequest(
         name,
         backend_url: backendOrigin,
         node_id: anyNode.id,
+        home_node_id: anyNode.id,
         created_at: new Date().toISOString(),
       };
       embysKV.version += 1;
@@ -136,7 +136,7 @@ export async function handleDirectRequest(
     }
   }
 
-  const node = await chooseNode(env, emby, nodesKV.nodes);
+  const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
   if (!node) {
     // 直连模式
     const target = buildTargetUrl(emby.backend_url, subpath, url.search);
@@ -253,6 +253,7 @@ async function chooseNode(
   env: Env,
   emby: EmbyRecord,
   nodes: NodeRecord[],
+  ctx: ExecutionContext,
 ): Promise<NodeRecord | null> {
   if (!emby.node_id) {
     // 直连模式：不经过代理
@@ -266,13 +267,28 @@ async function chooseNode(
     return primary;
   }
 
-  // 主节点不健康：从其他节点中随机挑一个健康的
+  // 当前节点不健康：从其他节点中随机挑一个健康的
   const fallbacks = nodes
     .filter((n) => n.id !== emby.node_id && health.nodes[n.id]?.healthy);
   if (fallbacks.length > 0) {
     const pick = fallbacks[Math.floor(Math.random() * fallbacks.length)]!;
     console.warn(
-      `node '${emby.node_id}' unhealthy for emby='${emby.name}', picking fallback='${pick.id}'`,
+      `node '${emby.node_id}' unhealthy for emby='${emby.name}', failover to '${pick.id}' (home='${emby.home_node_id}')`,
+    );
+    // 持久化转移：该不健康节点关联的所有 emby 一并切到新节点，后续请求直达；
+    // home_node_id 保持原始配置，探活确认原节点恢复后由 runHealthCycle 切回
+    const unhealthyId = emby.node_id;
+    ctx.waitUntil(
+      env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?")
+        .bind(pick.id, unhealthyId)
+        .run()
+        .then(
+          (r) =>
+            console.log(
+              `[failover] moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${pick.id}'`,
+            ),
+          (err) => console.error(`[failover] persist failed: ${err}`),
+        ),
     );
     return pick;
   }

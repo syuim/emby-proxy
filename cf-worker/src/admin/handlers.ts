@@ -121,24 +121,24 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
   const otherNodes = nodes.nodes.filter((n) => n.id !== id);
   const fallbackNode = otherNodes[0] ?? null;
 
-  const refs = embys.embys.filter((e) => e.node_id === id);
+  const refs = embys.embys.filter(
+    (e) => e.node_id === id || e.home_node_id === id,
+  );
 
   const stmts: D1PreparedStatement[] = [];
 
   let embysChanged = false;
   if (refs.length > 0) {
-    if (!fallbackNode) {
-      // 没有其他节点时清空 node_id（直连模式）
-      stmts.push(
-        env.EMBY_DB.prepare("UPDATE embys SET node_id = '' WHERE node_id = ?").bind(id),
-      );
-    } else {
-      stmts.push(
-        env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?").bind(
-          fallbackNode.id, id,
-        ),
-      );
-    }
+    // node_id 与 home_node_id 分开解引用：故障转移到其他节点的 emby 只需改 home
+    const fallbackId = fallbackNode?.id ?? "";
+    stmts.push(
+      env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?").bind(
+        fallbackId, id,
+      ),
+      env.EMBY_DB.prepare(
+        "UPDATE embys SET home_node_id = ? WHERE home_node_id = ?",
+      ).bind(fallbackId, id),
+    );
     embys.version += 1;
     stmts.push(
       env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
@@ -172,11 +172,13 @@ export async function handleListEmbys(env: Env): Promise<Response> {
 
 export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Response> {
   const { name, backend_url, node_id } = req.body ?? {};
+  const nodeId = typeof node_id === "string" ? node_id : "";
   const trimmed: Omit<EmbyRecord, "created_at"> = {
     name: typeof name === "string" ? name.trim() : "",
     backend_url:
       typeof backend_url === "string" ? backend_url.trim().replace(/\/$/, "") : "",
-    node_id: typeof node_id === "string" ? node_id : "",
+    node_id: nodeId,
+    home_node_id: nodeId,
   };
   const err = validateEmby(trimmed);
   if (err) return json(400, { error: err });
@@ -225,8 +227,10 @@ export async function handleUpdateEmby(
     }
   }
   if (typeof node_id === "string") {
-    if (node_id !== emby.node_id) {
+    if (node_id !== emby.node_id || node_id !== emby.home_node_id) {
+      // 显式指定节点：node_id 与 home_node_id 一并更新（重置故障转移状态）
       emby.node_id = node_id;
+      emby.home_node_id = node_id;
       changed = true;
     }
   }
@@ -271,13 +275,14 @@ export async function handleBatchUpdateEmbys(
     return json(400, { error: `node_id '${node_id}' 不存在` });
   }
 
-  // 批量更新
+  // 批量更新（显式指定节点：node_id 与 home_node_id 一并更新）
   const changedNames: string[] = [];
   for (const name of names) {
     const emby = embys.embys.find((e) => e.name === name);
     if (!emby) return json(400, { error: `emby '${name}' 不存在` });
-    if (emby.node_id !== node_id) {
+    if (emby.node_id !== node_id || emby.home_node_id !== node_id) {
       emby.node_id = node_id;
+      emby.home_node_id = node_id;
       changedNames.push(name);
     }
   }
@@ -297,8 +302,8 @@ export async function handleBatchUpdateEmbys(
     const placeholders = slice.map(() => "?").join(",");
     stmts.push(
       env.EMBY_DB.prepare(
-        `UPDATE embys SET node_id = ? WHERE name IN (${placeholders})`,
-      ).bind(node_id, ...slice),
+        `UPDATE embys SET node_id = ?, home_node_id = ? WHERE name IN (${placeholders})`,
+      ).bind(node_id, node_id, ...slice),
     );
   }
   stmts.push(
