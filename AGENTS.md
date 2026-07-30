@@ -72,7 +72,7 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 **关键约束**：
 - `EMBY_SYNC_TOKEN` 在 cf-worker 与所有节点上必须 **byte-for-byte** 一致，不一致 → 节点 401
 - ⚠️ **不要在 CF 面板上加 Plaintext Variables**：`wrangler deploy` 会用 `wrangler.toml` 中 `[vars]` 段覆盖明文变量（toml 没声明 = 部署后清空）。所有 token 走 `wrangler secret put`
-- `wrangler.toml` 已锁定 `account_id`（Suyu 账号），CI 非交互模式必需
+- `wrangler.toml` 已锁定 `account_id`（Suyu 账号）与 `name = "emby-proxy"`，不要改
 
 本地 dev：`cf-worker/.dev.vars`（已 gitignore），与生产 secrets 完全独立。
 
@@ -82,14 +82,14 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ## 部署
 
-- **CF Worker**：CF 已关联本 GitHub 仓库（Git 集成）——`cf-worker/**` 做完改动后 → 提交合并到 `main` 推送 GitHub，**CF 自动触发构建部署**，无需手动 `wrangler deploy`。直接说"部署"或"合并到 main"即可，不需要问。
-- **D1 migration**：**CI 不跑 migration**，需本地执行：
+- **CF Worker**：CF 已关联本 GitHub 仓库（Git 集成），线上 Worker 名为 **`emby-proxy`**（与 `wrangler.toml` 的 `name` 一致）——`cf-worker/**` 做完改动后 → 提交合并到 `main` 推送 GitHub，**CF 自动触发构建部署**，无需手动 `wrangler deploy`。直接说"部署"或"合并到 main"即可，不需要问。历史上曾有 GitHub Actions 部署链路（worker 名 `tg-toolbox-emby-router`），已移除，不要恢复。
+- **构建日志**：wrangler OAuth 无 Workers Builds 权限，CLI 查不了构建日志，失败原因去面板 Workers → emby-proxy → Deployments 看。CLI 只能用 `npx wrangler deployments list` 核对部署时间。
+- **D1 migration**：**CF 构建不跑 migration**，需本地执行（且要在推送部署前跑，避免新代码 SELECT 新列失败）：
   ```bash
   cd cf-worker && CLOUDFLARE_ACCOUNT_ID=9a2c5f84e3346b4d2310792e4f759881 npx wrangler d1 migrations apply emby-proxy --remote
   ```
   - `CLOUDFLARE_ACCOUNT_ID` 必须显式给：`d1 migrations` 子命令**不读 `wrangler.toml` 的 `account_id`**（wrangler 3.x），多账号下会报 "More than one account available"。
-  - 已实测：`CLOUDFLARE_API_TOKEN` 这个 CI secret **只有 Workers 权限、没有 D1 权限**，即使显式传 account id 也照样 `7403`。想接进 CI 得先给该 token 加 `Account → D1 → Edit`；在那之前不要把 migration 步骤加进 workflow —— 它排在 deploy 前面，一失败会把所有 Worker 部署连带 skip。
-  - 本地若也报 `7403`，先跑一次 `npx wrangler whoami` 刷新 OAuth token 再重试。
+  - 本地若报 `7403`，先跑一次 `npx wrangler whoami` 刷新 OAuth token 再重试。
 - **Go 节点**：使用 `Agent` 调用 `ops` subagent 执行，机器信息以 ops agent 为准。
 
 ### 部署后验证
