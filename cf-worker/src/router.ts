@@ -34,26 +34,12 @@ export async function handleClientRequest(
     return notFound(`unknown emby '${embyName}'`);
   }
 
-  // 地址访问：/<name>/https://...（原样或 URL 编码）→ 必走本地代理，不做节点选择。
-  // 由本地代理的 302/PlaybackInfo/M3U8 改写生成，目标多为 CDN 直链。
-  const rest = path.replace(/^\/+/, "").slice(embyName.length);
-  let restDecoded = rest;
-  if (!/^\/https?:\/\//i.test(restDecoded)) {
-    try {
-      restDecoded = decodeURIComponent(rest);
-    } catch {
-      restDecoded = rest;
-    }
-  }
-  if (/^\/https?:\/\//i.test(restDecoded)) {
-    return proxyLocal(request, restDecoded.slice(1) + url.search, emby.name, emby.backend_url);
-  }
-
   // Worker 本地代理：不 307，Worker 直接 fetch 后端回传
   if (emby.node_id === LOCAL_NODE_ID) {
     const subpath = "/" + segments.slice(1).join("/");
     return proxyLocal(
       request,
+      env,
       buildTargetUrl(emby.backend_url, subpath, url.search),
       emby.name,
       emby.backend_url,
@@ -93,8 +79,8 @@ export async function handleClientRequest(
 
 // ---------- Worker 本地代理引擎 ----------
 // 全程 Worker 中转：客户端只看到 Worker 域名。IP 透传固定 strict 模式（防 403）。
-// 后端 302/播放直链/M3U8 切片统一改写回 Worker 的 /<name>/<url> 地址形式，
-// 该形式的请求必走本地代理（见 handleClientRequest）。
+// 改写规则：同源（emby 后端自身）→ 名称形式 /<name>/path；
+// 跨域（CDN 直链）→ token 地址形式 /<token>/<url>（token 未设则原样放行）。
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const STATIC_ASSET_RE =
@@ -103,6 +89,7 @@ const EMBY_IMAGE_PATH_RE = /(\/Images\/|\/Icons\/|\/Branding\/|\/emby\/covers\/)
 
 async function proxyLocal(
   request: Request,
+  env: Env,
   target: string,
   prefixName: string,
   backendOrigin: string,
@@ -174,19 +161,27 @@ async function proxyLocal(
   const respHeaders = new Headers(resp.headers);
   const proxyOrigin = new URL(request.url).origin;
   const prefix = "/" + prefixName;
+  const token = env.DIRECT_PROXY_TOKEN;
 
-  // 302 拦截：重定向目标改写回 Worker，客户端不脱离代理。
-  // 同源（emby 后端自身）→ 名称形式 /<name>/path；跨域（CDN 直链）→ 地址形式 /<name>/<encoded url>
+  // 绝对 URL → Worker 路径：同源用名称形式，跨域用 token 地址形式（无 token 则原样）。
+  // token 形式统一编码：与用户粘贴的原样形式区分，回流请求不会触发自动注册。
+  const rewriteUrl = (u: URL): string | null => {
+    if (u.origin === backendOrigin) {
+      return prefix + u.pathname + u.search;
+    }
+    if (token) {
+      return "/" + token + "/" + encodeURIComponent(u.toString());
+    }
+    return null;
+  };
+
+  // 302 拦截：重定向目标改写回 Worker，客户端不脱离代理
   if (REDIRECT_STATUSES.has(resp.status)) {
     const loc = respHeaders.get("Location");
     if (loc) {
       try {
-        const resolved = new URL(loc, targetUrl);
-        if (resolved.origin === backendOrigin) {
-          respHeaders.set("Location", prefix + resolved.pathname + resolved.search);
-        } else {
-          respHeaders.set("Location", prefix + "/" + encodeURIComponent(resolved.toString()));
-        }
+        const rewritten = rewriteUrl(new URL(loc, targetUrl));
+        if (rewritten) respHeaders.set("Location", rewritten);
       } catch {
         // Location 解析失败：原样透传
       }
@@ -194,7 +189,7 @@ async function proxyLocal(
   }
   respHeaders.set("Access-Control-Allow-Origin", "*");
 
-  // PlaybackInfo JSON 重写：播放直链改走本地代理
+  // PlaybackInfo JSON 重写：播放直链改走 Worker
   if (
     resp.status === 200 &&
     (respHeaders.get("content-type") || "").includes("json") &&
@@ -209,8 +204,15 @@ async function proxyLocal(
         for (const key of ["DirectStreamUrl", "TranscodingUrl"]) {
           const v = source[key];
           if (typeof v === "string" && v.startsWith("http")) {
-            source[key] = proxyOrigin + prefix + "/" + v;
-            modified = true;
+            try {
+              const rewritten = rewriteUrl(new URL(v));
+              if (rewritten) {
+                source[key] = proxyOrigin + rewritten;
+                modified = true;
+              }
+            } catch {
+              // URL 解析失败：保留原值
+            }
           }
         }
       }
@@ -227,15 +229,19 @@ async function proxyLocal(
     }
   }
 
-  // M3U8 重写：切片直链改走本地代理
+  // M3U8 重写：切片直链改走 Worker
   if (resp.status === 200 && targetUrl.pathname.toLowerCase().endsWith(".m3u8")) {
     try {
       const text = await resp.clone().text();
       if (text.includes("http://") || text.includes("https://")) {
-        const rewritten = text.replace(
-          /(https?:\/\/[^\s]+)/g,
-          proxyOrigin + prefix + "/$1",
-        );
+        const rewritten = text.replace(/(https?:\/\/[^\s]+)/g, (m) => {
+          try {
+            const r = rewriteUrl(new URL(m));
+            return r ? proxyOrigin + r : m;
+          } catch {
+            return m;
+          }
+        });
         respHeaders.delete("Content-Length");
         return new Response(rewritten, {
           status: resp.status,
@@ -296,31 +302,41 @@ export async function handleDirectRequest(
   const path = url.pathname;
   const token = env.DIRECT_PROXY_TOKEN!;
 
-  // Path: /<token>/<backend_url>
-  // Stripping /<token>/ gives the full backend URL
+  // Path: /<token>/<backend_url>（原样或 URL 编码，编码形式来自 302 改写）
   const prefix = "/" + token + "/";
-  const backendUrlFull = path.startsWith(prefix) ? path.slice(prefix.length) : "";
+  let backendUrlFull = path.startsWith(prefix) ? path.slice(prefix.length) : "";
+  const rawForm = /^https?:\/\//i.test(backendUrlFull);
+  if (!rawForm) {
+    try {
+      backendUrlFull = decodeURIComponent(backendUrlFull);
+    } catch {
+      // 保留原样，下面统一报 400
+    }
+  }
   if (!backendUrlFull.startsWith("http://") && !backendUrlFull.startsWith("https://")) {
     return new Response("Bad Request: backend URL must start with http:// or https://", { status: 400 });
   }
 
-  let backendOrigin: string;
-  let subpath: string;
+  let parsed: URL;
   try {
-    const parsed = new URL(backendUrlFull);
-    backendOrigin = parsed.origin;
-    subpath = parsed.pathname;
+    parsed = new URL(backendUrlFull);
     if (isPrivateHost(parsed.hostname)) {
       return new Response("Forbidden: backend URL points to a private or reserved address", { status: 403 });
     }
   } catch {
     return new Response("Bad Request: invalid backend URL", { status: 400 });
   }
+  const backendOrigin = parsed.origin;
+  // URL 自带 query（编码形式常见，如 CDN 签名）与外层 query 合并
+  const combinedSearch = parsed.search
+    ? parsed.search + (url.search ? "&" + url.search.slice(1) : "")
+    : url.search;
 
   const [embysKV, nodesKV] = await Promise.all([readEmbys(env), readNodes(env)]);
 
   let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
-  if (!emby) {
+  // 只在原样形式（用户粘贴入口）时自动注册；编码形式是改写回流（多为 CDN），不注册避免刷表
+  if (!emby && rawForm) {
     const anyNode = nodesKV.nodes[0];
 
     const name = await generateDirectEmbyName(backendOrigin);
@@ -353,9 +369,9 @@ export async function handleDirectRequest(
     }
   }
 
-  // 地址访问必走本地代理（改写产物用 /<name>/<url> 名称前缀形式，后续同样命中本地代理）
-  const target = buildTargetUrl(emby.backend_url, subpath, url.search);
-  return proxyLocal(request, target, emby.name, emby.backend_url);
+  // token 访问必走本地代理。未注册的源（CDN 回流）：无名称前缀，改写全部用 token 形式
+  const target = backendOrigin + parsed.pathname + combinedSearch;
+  return proxyLocal(request, env, target, emby?.name ?? "", emby ? emby.backend_url : "");
 }
 
 async function generateDirectEmbyName(backendUrl: string): Promise<string> {
