@@ -483,17 +483,8 @@
         .toolbar { flex-wrap: wrap; gap: 8px; }
         .form-grid { grid-template-columns: 1fr; }
 
-        .table-wrap-nodes th:nth-child(5),
-        .table-wrap-nodes td:nth-child(5),
-        .table-wrap-nodes th:nth-child(6),
-        .table-wrap-nodes td:nth-child(6),
-        .table-wrap-nodes th:nth-child(7),
-        .table-wrap-nodes td:nth-child(7),
-        .table-wrap-nodes th:nth-child(8),
-        .table-wrap-nodes td:nth-child(8) { display: none; }
-
-        .table-wrap-embys th:nth-child(6),
-        .table-wrap-embys td:nth-child(6) { display: none; }
+        .table-wrap-nodes th:nth-child(4),
+        .table-wrap-nodes td:nth-child(4) { display: none; }
 
         .col-actions { width: auto; }
         th:last-child, td:last-child {
@@ -554,9 +545,6 @@
         .empty { padding: 32px 12px; font-size: 11px; }
 
         .table-wrap { border-radius: var(--radius-sm); }
-        .table-wrap-nodes th:nth-child(4),
-        .table-wrap-nodes td:nth-child(4) { display: none; }
-
         .table-wrap-embys:not(.editing) th:nth-child(3),
         .table-wrap-embys:not(.editing) td:nth-child(3) { display: none; }
 
@@ -653,7 +641,7 @@
         return '<span class="badge bad">异常</span>';
       }
 
-      // 移动端隐藏了「延迟」「最近同步错误」列，明细改由 toast 承载
+      // 延迟/同步错误等明细不进表格，由探测 toast 承载
       function clip(s, n) {
         const v = String(s ?? "");
         return v.length > n ? v.slice(0, n) + "…" : v;
@@ -828,11 +816,10 @@
               : `<div class="table-wrap table-wrap-embys ${state.editingEmby ? "editing" : ""}"><table>
                   <thead><tr>
                     <th style="width:36px;"><input type="checkbox" id="select-all" /></th>
-                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th>后端延迟</th><th class="col-actions">操作</th>
+                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th class="col-actions">操作</th>
                   </tr></thead>
                   <tbody>
                     ${paged.map((e) => {
-                      const h = state.health[e.node_id] || {};
                       const editing = state.editingEmby === e.name;
                       if (editing) {
                         return `
@@ -847,7 +834,6 @@
                               </select>
                             </td>
                             <td>${healthBadge(e.node_id)}</td>
-                            <td class="mono">${h.backend_latencies?.[e.name] ?? "-"}${h.backend_latencies?.[e.name] != null ? " ms" : ""}</td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
                               <button class="btn btn-ghost" data-act="cancel">取消</button>
@@ -862,7 +848,6 @@
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
                           <td>${nodeLabel(e.node_id)}</td>
                           <td>${healthBadge(e.node_id)}</td>
-                          <td class="mono">${h.backend_latencies?.[e.name] ?? "-"}${h.backend_latencies?.[e.name] != null ? " ms" : ""}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
                             <button class="btn btn-danger" data-act="del">删除</button>
@@ -1009,10 +994,6 @@
                     <th>节点</th>
                     <th>public_url</th>
                     <th>状态</th>
-                    <th>延迟</th>
-                    <th>连续失败</th>
-                    <th>已应用 version</th>
-                    <th>最近同步错误</th>
                     <th>最近检测</th>
                     <th class="col-actions">操作</th>
                   </tr></thead>
@@ -1025,14 +1006,9 @@
                           <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
                             <td><div class="stack-name">
                               <input class="row-name" value="${escapeHtml(n.name)}" />
-                              <span class="mono">${escapeHtml(n.id)}</span>
                             </div></td>
                             <td><input class="row-url mono" value="${escapeHtml(n.public_url)}" /></td>
                             <td>${healthBadge(n.id)}</td>
-                            <td class="mono">${h.last_latency_ms ?? "-"}${h.last_latency_ms != null ? " ms" : ""}</td>
-                            <td class="mono">${h.consecutive_fails ?? 0}</td>
-                            <td class="mono">${h.applied_version ?? "-"}</td>
-                            <td class="mono" style="max-width:240px;word-break:break-all;">${escapeHtml(h.last_sync_error ?? "-")}</td>
                             <td class="mono">${escapeHtml(h.last_check ?? "-")}</td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
@@ -1045,14 +1021,9 @@
                         <tr data-id="${escapeHtml(n.id)}" data-mode="view">
                           <td><div class="stack-name">
                             <strong>${escapeHtml(n.name)}</strong>
-                            <span class="mono">${escapeHtml(n.id)}</span>
                           </div></td>
                           <td class="mono">${escapeHtml(n.public_url)}</td>
                           <td>${healthBadge(n.id)}</td>
-                          <td class="mono">${h.last_latency_ms ?? "-"}${h.last_latency_ms != null ? " ms" : ""}</td>
-                          <td class="mono">${h.consecutive_fails ?? 0}</td>
-                          <td class="mono">${h.applied_version ?? "-"}</td>
-                          <td class="mono" style="max-width:240px;word-break:break-all;">${escapeHtml(h.last_sync_error ?? "-")}</td>
                           <td class="mono">${escapeHtml(h.last_check ?? "-")}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
