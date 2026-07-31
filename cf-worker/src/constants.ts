@@ -26,6 +26,7 @@ export const RESERVED_NAMES = new Set([
   "robots.txt",
   ".well-known",
   "_",
+  "tmdb",
 ]);
 
 export const ADMIN_COOKIE = "admin_token";

@@ -1,6 +1,6 @@
 import { routeAdmin } from "./admin";
 import { runHealthCycle } from "./health";
-import { handleClientRequest, handleDirectRequest } from "./router";
+import { handleClientRequest, handleDirectRequest, handleTmdbRequest } from "./router";
 import type { Env } from "./types";
 
 export default {
@@ -19,6 +19,10 @@ export default {
 
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
       return routeAdmin(request, env, ctx);
+    }
+
+    if (url.pathname === "/tmdb" || url.pathname.startsWith("/tmdb/")) {
+      return handleTmdbRequest(request);
     }
 
     // Direct proxy: /<DIRECT_PROXY_TOKEN>/<backend_url>

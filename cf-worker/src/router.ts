@@ -65,6 +65,28 @@ export async function handleClientRequest(
   });
 }
 
+// ---------- TMDB 反向代理（Worker 直接转发，不走节点） ----------
+
+const TMDB_API_ORIGIN = "https://api.themoviedb.org";
+
+export async function handleTmdbRequest(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const subpath = url.pathname.slice("/tmdb".length) || "/";
+  const target = TMDB_API_ORIGIN + subpath + url.search;
+
+  const headers = new Headers();
+  for (const k of ["accept", "content-type", "authorization"]) {
+    const v = request.headers.get(k);
+    if (v) headers.set(k, v);
+  }
+
+  return fetch(target, {
+    method: request.method,
+    headers,
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+  });
+}
+
 // ---------- Direct proxy (auto-register) ----------
 
 export async function handleDirectRequest(
