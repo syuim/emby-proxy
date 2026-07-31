@@ -404,8 +404,14 @@ async function persistIfConfirmedDead(
     )
       .bind(targetId, unhealthyId)
       .run();
+    // 同步回写 health 表，让管理 UI 状态与实际切换一致（不用等 cron）
+    await env.EMBY_DB.prepare(
+      "UPDATE health SET healthy = 0, last_check = ?, consecutive_fails = consecutive_fails + 1 WHERE node_id = ?",
+    )
+      .bind(new Date().toISOString(), unhealthyId)
+      .run();
     console.log(
-      `[failover] confirmed dead, moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${targetId || "direct"}'`,
+      `[failover] confirmed dead, moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${targetId || "direct"}', health marked down`,
     );
   } catch (err) {
     console.error(`[failover] persist failed: ${err}`);
