@@ -34,10 +34,30 @@ export async function handleClientRequest(
     return notFound(`unknown emby '${embyName}'`);
   }
 
+  // 地址访问：/<name>/https://...（原样或 URL 编码）→ 必走本地代理，不做节点选择。
+  // 由本地代理的 302/PlaybackInfo/M3U8 改写生成，目标多为 CDN 直链。
+  const rest = path.replace(/^\/+/, "").slice(embyName.length);
+  let restDecoded = rest;
+  if (!/^\/https?:\/\//i.test(restDecoded)) {
+    try {
+      restDecoded = decodeURIComponent(rest);
+    } catch {
+      restDecoded = rest;
+    }
+  }
+  if (/^\/https?:\/\//i.test(restDecoded)) {
+    return proxyLocal(request, restDecoded.slice(1) + url.search, emby.name, emby.backend_url);
+  }
+
   // Worker 本地代理：不 307，Worker 直接 fetch 后端回传
   if (emby.node_id === LOCAL_NODE_ID) {
     const subpath = "/" + segments.slice(1).join("/");
-    return proxyLocal(request, buildTargetUrl(emby.backend_url, subpath, url.search));
+    return proxyLocal(
+      request,
+      buildTargetUrl(emby.backend_url, subpath, url.search),
+      emby.name,
+      emby.backend_url,
+    );
   }
 
   const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
@@ -71,16 +91,175 @@ export async function handleClientRequest(
   });
 }
 
-// ---------- Worker 本地代理（node_id = "local"） ----------
+// ---------- Worker 本地代理引擎 ----------
+// 全程 Worker 中转：客户端只看到 Worker 域名。IP 透传固定 strict 模式（防 403）。
+// 后端 302/播放直链/M3U8 切片统一改写回 Worker 的 /<name>/<url> 地址形式，
+// 该形式的请求必走本地代理（见 handleClientRequest）。
 
-function proxyLocal(request: Request, target: string): Promise<Response> {
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const STATIC_ASSET_RE =
+  /\.(jpg|jpeg|gif|png|svg|ico|webp|js|css|woff2?|ttf|otf|map|webmanifest|srt|ass|vtt|sub)$/i;
+const EMBY_IMAGE_PATH_RE = /(\/Images\/|\/Icons\/|\/Branding\/|\/emby\/covers\/)/i;
+
+async function proxyLocal(
+  request: Request,
+  target: string,
+  prefixName: string,
+  backendOrigin: string,
+): Promise<Response> {
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
+
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    return new Response("Bad Gateway: invalid target URL", { status: 502 });
+  }
+  if (isPrivateHost(targetUrl.hostname)) {
+    return new Response("Forbidden: target points to a private or reserved address", {
+      status: 403,
+    });
+  }
+
+  // strict：抹 CF/代理头 + 对齐 Origin/Referer + 透传真实 IP
+  const realIp =
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip") ||
+    (request.headers.get("x-forwarded-for") || "").split(",")[0]!.trim();
   const headers = new Headers(request.headers);
-  headers.delete("host");
-  return fetch(target, {
+  for (const h of [
+    "host",
+    "cf-connecting-ip",
+    "cf-ipcountry",
+    "cf-ray",
+    "cf-visitor",
+    "x-forwarded-for",
+    "x-real-ip",
+    "x-forwarded-proto",
+    "x-forwarded-host",
+  ]) {
+    headers.delete(h);
+  }
+  headers.set("Origin", targetUrl.origin);
+  headers.set("Referer", targetUrl.origin + "/");
+  if (realIp) {
+    headers.set("X-Real-IP", realIp);
+    headers.set("X-Forwarded-For", realIp);
+  }
+
+  const isStatic =
+    STATIC_ASSET_RE.test(targetUrl.pathname) || EMBY_IMAGE_PATH_RE.test(targetUrl.pathname);
+
+  const init: RequestInit & { cf?: { cacheEverything: boolean; cacheTtl: number } } = {
     method: request.method,
     headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
     redirect: "manual",
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+  };
+  if (isStatic) {
+    init.cf = { cacheEverything: true, cacheTtl: 86400 };
+  }
+
+  const resp = await fetch(targetUrl.toString(), init);
+  const respHeaders = new Headers(resp.headers);
+  const proxyOrigin = new URL(request.url).origin;
+  const prefix = "/" + prefixName;
+
+  // 302 拦截：重定向目标改写回 Worker，客户端不脱离代理。
+  // 同源（emby 后端自身）→ 名称形式 /<name>/path；跨域（CDN 直链）→ 地址形式 /<name>/<encoded url>
+  if (REDIRECT_STATUSES.has(resp.status)) {
+    const loc = respHeaders.get("Location");
+    if (loc) {
+      try {
+        const resolved = new URL(loc, targetUrl);
+        if (resolved.origin === backendOrigin) {
+          respHeaders.set("Location", prefix + resolved.pathname + resolved.search);
+        } else {
+          respHeaders.set("Location", prefix + "/" + encodeURIComponent(resolved.toString()));
+        }
+      } catch {
+        // Location 解析失败：原样透传
+      }
+    }
+  }
+  respHeaders.set("Access-Control-Allow-Origin", "*");
+
+  // PlaybackInfo JSON 重写：播放直链改走本地代理
+  if (
+    resp.status === 200 &&
+    (respHeaders.get("content-type") || "").includes("json") &&
+    targetUrl.pathname.toLowerCase().includes("playbackinfo")
+  ) {
+    try {
+      const data = (await resp.clone().json()) as {
+        MediaSources?: Array<Record<string, unknown>>;
+      };
+      let modified = false;
+      for (const source of data?.MediaSources ?? []) {
+        for (const key of ["DirectStreamUrl", "TranscodingUrl"]) {
+          const v = source[key];
+          if (typeof v === "string" && v.startsWith("http")) {
+            source[key] = proxyOrigin + prefix + "/" + v;
+            modified = true;
+          }
+        }
+      }
+      if (modified) {
+        respHeaders.delete("Content-Length");
+        return new Response(JSON.stringify(data), {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: respHeaders,
+        });
+      }
+    } catch (e) {
+      console.log("PlaybackInfo rewrite failed:", (e as Error).message);
+    }
+  }
+
+  // M3U8 重写：切片直链改走本地代理
+  if (resp.status === 200 && targetUrl.pathname.toLowerCase().endsWith(".m3u8")) {
+    try {
+      const text = await resp.clone().text();
+      if (text.includes("http://") || text.includes("https://")) {
+        const rewritten = text.replace(
+          /(https?:\/\/[^\s]+)/g,
+          proxyOrigin + prefix + "/$1",
+        );
+        respHeaders.delete("Content-Length");
+        return new Response(rewritten, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: respHeaders,
+        });
+      }
+    } catch (e) {
+      console.log("M3U8 rewrite failed:", (e as Error).message);
+    }
+  }
+
+  if (isStatic) {
+    respHeaders.set("Cache-Control", "public, max-age=86400");
+    respHeaders.delete("Expires");
+    respHeaders.delete("Pragma");
+  } else {
+    respHeaders.set("Cache-Control", "no-store");
+  }
+
+  return new Response(resp.body, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: respHeaders,
   });
 }
 
@@ -143,9 +322,6 @@ export async function handleDirectRequest(
   let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
   if (!emby) {
     const anyNode = nodesKV.nodes[0];
-    if (!anyNode) {
-      return new Response("Bad Gateway: no node available", { status: 502 });
-    }
 
     const name = await generateDirectEmbyName(backendOrigin);
     if (embysKV.embys.some((e) => e.name === name)) {
@@ -160,8 +336,8 @@ export async function handleDirectRequest(
       emby = {
         name,
         backend_url: backendOrigin,
-        node_id: anyNode.id,
-        home_node_id: anyNode.id,
+        node_id: anyNode?.id ?? "",
+        home_node_id: anyNode?.id ?? "",
         created_at: new Date().toISOString(),
       };
       embysKV.version += 1;
@@ -177,23 +353,9 @@ export async function handleDirectRequest(
     }
   }
 
-  const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
-  if (!node) {
-    // 直连模式
-    const target = buildTargetUrl(emby.backend_url, subpath, url.search);
-    return new Response(null, {
-      status: 307,
-      headers: { Location: target, "Cache-Control": "no-store" },
-    });
-  }
-
-  const nodePath = "/" + emby.name + subpath;
-  const target = buildTargetUrl(node.public_url, nodePath, url.search);
-
-  return new Response(null, {
-    status: 307,
-    headers: { Location: target, "Cache-Control": "no-store" },
-  });
+  // 地址访问必走本地代理（改写产物用 /<name>/<url> 名称前缀形式，后续同样命中本地代理）
+  const target = buildTargetUrl(emby.backend_url, subpath, url.search);
+  return proxyLocal(request, target, emby.name, emby.backend_url);
 }
 
 async function generateDirectEmbyName(backendUrl: string): Promise<string> {
