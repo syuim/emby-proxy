@@ -1,7 +1,3 @@
-export const KV_KEY_NODES = "nodes";
-export const KV_KEY_EMBYS = "embys";
-export const KV_KEY_HEALTH = "health";
-
 export const SYNC_PATH = "/admin/sync";
 export const STATUS_PATH = "/admin/status";
 export const NODE_HEALTH_PATH = "/__health";

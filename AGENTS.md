@@ -56,9 +56,9 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 - **误报防护**：故障转移持久化写库前，会对「不健康」节点实时复核探测一次（`persistIfConfirmedDead`）；节点实际活着（health 表过期/误报）则跳过写库，本次请求仍走转移目标，等 cron 自愈。
 - 管理端显式设置节点（add/update/batch）会同时写 `node_id` 与 `home_node_id`，即重置故障转移状态。
 
-健康检测：cron 每 10 分钟探活，连续 2 次失败降级 / 1 次成功恢复。
+健康检测：cron 每 5 分钟探活（`wrangler.toml` 的 `crons = ["*/5 * * * *"]`），连续 2 次失败降级 / 1 次成功恢复。
 
-探活降频：节点连续失败 ≥5 次后，30 分钟内只真实探测一次，避免反复打已知死节点。探测成功后若节点 `applied_version` 落后 KV，会异步补推一次配置。
+探活降频：节点连续失败 ≥5 次后，30 分钟内只真实探测一次，避免反复打已知死节点。探测成功后若节点 `applied_version` 落后 `config_meta.version`，会异步补推一次配置。
 
 ## 必需环境变量
 
@@ -121,4 +121,4 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 |---|---|---|
 | 1 | 节点日志（dash） | `ssh -i ~/.ssh/syu_vps -p 22 admin@dash.127315.xyz 'sudo docker logs --tail 100 proxy-go-emby-proxy-1'` |
 | 2 | Worker 实时日志 | `cd cf-worker && npx wrangler tail --format pretty` |
-| 3 | KV 内容 | `cd cf-worker && npx wrangler kv key list --binding=EMBY_KV` |
+| 3 | D1 数据（无 KV，全在 D1） | `cd cf-worker && CLOUDFLARE_ACCOUNT_ID=9a2c5f84e3346b4d2310792e4f759881 npx wrangler d1 execute emby-proxy --remote --json --command "SELECT * FROM embys"`（表：`nodes` / `embys` / `health` / `config_meta`） |
