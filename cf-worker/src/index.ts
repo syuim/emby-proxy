@@ -1,4 +1,5 @@
 import { routeAdmin } from "./admin";
+import { EMBY_BASE_PATH } from "./constants";
 import { runHealthCycle } from "./health";
 import { handleClientRequest, handleDirectRequest, handleTmdbRequest } from "./router";
 import type { Env } from "./types";
@@ -25,15 +26,21 @@ export default {
       return handleTmdbRequest(request);
     }
 
-    // Direct proxy: /<DIRECT_PROXY_TOKEN>/<backend_url>
-    if (env.DIRECT_PROXY_TOKEN) {
-      const first = url.pathname.split("/").filter(Boolean)[0];
-      if (first === env.DIRECT_PROXY_TOKEN) {
-        return handleDirectRequest(request, env, ctx);
+    // 一级命名空间：/emby/<name>/... 或 /emby/<token>/<url>
+    if (url.pathname.startsWith(EMBY_BASE_PATH + "/")) {
+      if (env.DIRECT_PROXY_TOKEN) {
+        const second = url.pathname.slice(EMBY_BASE_PATH.length + 1).split("/")[0];
+        if (second === env.DIRECT_PROXY_TOKEN) {
+          return handleDirectRequest(request, env, ctx);
+        }
       }
+      return handleClientRequest(request, env, ctx);
     }
 
-    return handleClientRequest(request, env, ctx);
+    return new Response("Not Found", {
+      status: 404,
+      headers: { "Cache-Control": "no-store" },
+    });
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

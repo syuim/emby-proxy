@@ -1,4 +1,4 @@
-import { HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
+import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
 import { readEmbys, readHealth, readNodes, writeEmbys } from "./storage";
 import { buildSnapshot, pushSnapshotToAll } from "./sync";
 import { immediateProbe, mergeSyncResults } from "./health";
@@ -15,11 +15,11 @@ export async function handleClientRequest(
   const url = new URL(request.url);
   const path = url.pathname;
 
-  const segments = path.split("/").filter(Boolean);
-  if (segments.length === 0) {
+  const segments = path.split("/").filter(Boolean); // ["emby", <name>, ...subpath]
+  const embyName = segments[1];
+  if (!embyName) {
     return notFound("missing emby name");
   }
-  const embyName = segments[0]!;
   if (RESERVED_NAMES.has(embyName.toLowerCase())) {
     return notFound("reserved path");
   }
@@ -34,9 +34,10 @@ export async function handleClientRequest(
     return notFound(`unknown emby '${embyName}'`);
   }
 
+  const subpath = "/" + segments.slice(2).join("/");
+
   // Worker 本地代理：不 307，Worker 直接 fetch 后端回传
   if (emby.node_id === LOCAL_NODE_ID) {
-    const subpath = "/" + segments.slice(1).join("/");
     return proxyLocal(
       request,
       env,
@@ -49,7 +50,6 @@ export async function handleClientRequest(
   const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
   if (!node) {
     // 所有代理节点不可用 → 直连 emby backend
-    const subpath = "/" + segments.slice(1).join("/");
     const target = buildTargetUrl(emby.backend_url, subpath, url.search);
     // 图片缓存已注释，图片/视频统一走 307 节点代理
     // if (isCacheableImageRequest(request, path)) {
@@ -61,7 +61,8 @@ export async function handleClientRequest(
     });
   }
 
-  const target = buildTargetUrl(node.public_url, path, url.search);
+  // 节点协议路径不含 /emby 前缀：/<name>/subpath
+  const target = buildTargetUrl(node.public_url, "/" + emby.name + subpath, url.search);
 
   // 图片缓存已注释，图片/视频统一走 307 节点代理
   // if (isCacheableImageRequest(request, path)) {
@@ -160,7 +161,7 @@ async function proxyLocal(
   const resp = await fetch(targetUrl.toString(), init);
   const respHeaders = new Headers(resp.headers);
   const proxyOrigin = new URL(request.url).origin;
-  const prefix = "/" + prefixName;
+  const prefix = EMBY_BASE_PATH + "/" + prefixName;
   const token = env.DIRECT_PROXY_TOKEN;
 
   // 绝对 URL → Worker 路径：同源用名称形式，跨域用 token 地址形式（无 token 则原样）。
@@ -170,7 +171,7 @@ async function proxyLocal(
       return prefix + u.pathname + u.search;
     }
     if (token) {
-      return "/" + token + "/" + encodeURIComponent(u.toString());
+      return EMBY_BASE_PATH + "/" + token + "/" + encodeURIComponent(u.toString());
     }
     return null;
   };
@@ -302,8 +303,8 @@ export async function handleDirectRequest(
   const path = url.pathname;
   const token = env.DIRECT_PROXY_TOKEN!;
 
-  // Path: /<token>/<backend_url>（原样或 URL 编码，编码形式来自 302 改写）
-  const prefix = "/" + token + "/";
+  // Path: /emby/<token>/<backend_url>（原样或 URL 编码，编码形式来自 302 改写）
+  const prefix = EMBY_BASE_PATH + "/" + token + "/";
   let backendUrlFull = path.startsWith(prefix) ? path.slice(prefix.length) : "";
   const rawForm = /^https?:\/\//i.test(backendUrlFull);
   if (!rawForm) {
