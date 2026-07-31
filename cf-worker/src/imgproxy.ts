@@ -1,6 +1,7 @@
 // /img 通用图片/请求代理：GET ?url=... 或 POST {url, method, body, headers}
 // 无鉴权。UA 未指定时随机伪装浏览器；Referer 按外部规则表自动补齐（防盗链）。
 import { isPrivateHost } from "./router";
+import { IMAGE_CACHE_MAX_AGE } from "./constants";
 import type { Env } from "./types";
 
 const UA_LIST = [
@@ -156,23 +157,42 @@ export async function handleImgRequest(request: Request, env: Env): Promise<Resp
     targetHeaders["Referer"] = referer;
   }
 
+  // 仅幂等 GET（且无自定义 body）可缓存：cacheEverything 让 CF 边缘缓存出网子请求，
+  // 命中即省回源；cacheTtlByStatus 只缓存 2xx，避免把 404/错误页缓存住。
+  const cacheable = targetMethod === "GET" && !targetBody;
+  const init: RequestInit & {
+    cf?: { cacheEverything: boolean; cacheTtlByStatus: Record<string, number> };
+  } = {
+    method: targetMethod,
+    body: targetBody || undefined,
+    headers: targetHeaders,
+  };
+  if (cacheable) {
+    init.cf = {
+      cacheEverything: true,
+      cacheTtlByStatus: { "200-299": IMAGE_CACHE_MAX_AGE, "300-599": 0 },
+    };
+  }
+
   let response: Response;
   try {
-    response = await fetch(targetURL, {
-      method: targetMethod,
-      body: targetBody || undefined,
-      headers: targetHeaders,
-    });
+    response = await fetch(targetURL, init);
   } catch {
     return error("Bad Gateway: fetch failed", 502);
   }
 
+  const cacheHit = cacheable && response.status >= 200 && response.status < 300;
+  const respHeaders: Record<string, string> = {
+    ...CORS_HEADERS,
+    "Access-Control-Allow-Origin": origin,
+    "Content-Type": response.headers.get("Content-Type") || "application/octet-stream",
+    "Cache-Control": cacheHit ? `public, max-age=${IMAGE_CACHE_MAX_AGE}` : "no-store",
+  };
+  // 响应回显请求 Origin，公共缓存需按 Origin 分桶，避免跨源命中导致 CORS 报错
+  if (cacheHit) respHeaders["Vary"] = "Origin";
+
   return new Response(response.body, {
     status: response.status,
-    headers: {
-      ...CORS_HEADERS,
-      "Access-Control-Allow-Origin": origin,
-      "Content-Type": response.headers.get("Content-Type") || "application/octet-stream",
-    },
+    headers: respHeaders,
   });
 }
