@@ -17,8 +17,10 @@ export const THROTTLE_PROBE_INTERVAL_MS = 30 * 60 * 1000;
 
 export const EMBY_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 
-// 一级功能命名空间：emby 功能挂在 /emby/<name>/... 与 /emby/<token>/<url> 下
+// 一级功能命名空间：emby 功能挂在 /emby/<name>/... 与 /emby/<url> 下
 export const EMBY_BASE_PATH = "/emby";
+// 一级功能命名空间：通用图片代理 /img?url=...
+export const IMG_BASE_PATH = "/img";
 
 // emby.node_id 哨兵值：Worker 本地代理（不 307，Worker 直接 fetch 后端回传）
 export const LOCAL_NODE_ID = "local";

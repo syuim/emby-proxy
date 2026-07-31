@@ -35,7 +35,7 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ## URL 命名空间与命名规则
 
-一级路径按功能划分（**硬切换，无旧路径兼容**）：目前 emby 相关全部挂在 `/emby/...` 下——`/emby/<name>/path`（名称访问）、`/emby/<token>/<url>`（token 地址访问）、`/emby/tmdb/...`（TMDB 反代）、`/emby/admin`（管理 UI/API）。根路径 `/` 302 到 `/emby/admin`，`/__health` 保留在顶层；其余一级路径 404，后续新功能（图片代理等）占用新的一级路径。
+一级路径按功能划分（**硬切换，无旧路径兼容**）：emby 相关全部挂在 `/emby/...` 下——`/emby/<name>/path`（名称访问）、`/emby/http(s)://...`（地址访问，原样或 URL 编码，无鉴权）、`/emby/tmdb/...`（TMDB 反代）、`/emby/admin`（管理 UI/API）；`/img` 为通用图片代理（见下）。根路径 `/` 302 到 `/emby/admin`，`/__health` 保留在顶层；其余一级路径 404。
 
 **节点协议路径不含 `/emby` 前缀**：307 到节点仍是 `/<name>/subpath`（proxy-go 契约不变，节点的 `/admin/sync` 也与此无关）。
 
@@ -50,8 +50,8 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 - **失败判定（请求驱动）**：router 选节点时对目标节点实时探测 `GET /__health`（3s 超时），isolate 内存缓存**非对称 TTL**（活 30s / 死 15s）。探测不通并行探测其余节点，按排序取第一个活的立即切换（全灭最坏 ~6s：主节点超时 3s + 并行探测 3s），**不依赖 cron 探活周期**。cron 探活仍负责 failback/救援判定与配置补推。
 - **转移（sticky）**：emby 的 `node_id` 探测不通 → router 按节点 `sort_order` 排序，从当前节点位置**依次往下**（到末尾回绕）挑第一个探测存活的，并把该故障节点关联的**所有 emby** 的 `node_id` 定向 UPDATE 为新节点（`home_node_id` 不动），后续请求直接命中新节点。转移可能连锁发生多次。节点排序在管理 UI 节点页用 ↑/↓ 调整（`POST /admin/api/nodes/reorder`）。
 - **兜底（也持久化）**：全部节点不健康 → 307 直连 emby 的 `backend_url`（不返 503），并把该不健康节点关联的所有 emby 的 `node_id` UPDATE 为 `''`（直连），后续请求不再逐个探健康；探活周期负责恢复：home 恢复 → 切回；home 未恢复但有其他健康节点 → 按排序转移过去。
-- **本地代理**：`node_id = 'local'` 是哨兵值（非真实节点），表示 Worker 本地代理——不 307，Worker 全程中转，客户端只见 Worker 域名。IP 透传固定 strict：抹 CF/代理头、Origin/Referer 对齐后端、透传 X-Real-IP/X-Forwarded-For。改写规则：后端 302 / PlaybackInfo（`DirectStreamUrl`/`TranscodingUrl`）/ M3U8 切片里的绝对 URL，**同源**改写为名称形式 `/emby/<name>/path`，**跨域**（CDN 直链）改写为 token 编码形式 `/emby/<token>/<encodeURIComponent(url)>`（`DIRECT_PROXY_TOKEN` 未设则跨域 URL 原样放行）。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。仅显式配置可用，不参与故障转移/探活。
-- **只有两种访问形式**：名称访问 `/emby/<name>/path` → 走节点选择（local 亦在其中）；token 地址访问 `/emby/<token>/http(s)://...` → **必走本地代理**。不存在 `/emby/<name>/<url>` 形式。
+- **本地代理**：`node_id = 'local'` 是哨兵值（非真实节点），表示 Worker 本地代理——不 307，Worker 全程中转，客户端只见 Worker 域名。IP 透传固定 strict：抹 CF/代理头、Origin/Referer 对齐后端、透传 X-Real-IP/X-Forwarded-For。改写规则：后端 302 / PlaybackInfo（`DirectStreamUrl`/`TranscodingUrl`）/ M3U8 切片里的绝对 URL，**同源**改写为名称形式 `/emby/<name>/path`，**跨域**（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。仅显式配置可用，不参与故障转移/探活。
+- **只有两种访问形式**：名称访问 `/emby/<name>/path` → 走节点选择（local 亦在其中）；地址访问 `/emby/http(s)://...`（原样或 URL 编码）→ **必走本地代理**。不存在 `/emby/<name>/<url>` 形式。**原样形式**（用户粘贴）会自动注册 emby（有节点分配默认节点，无节点注册为直连）；**编码形式**是本地代理改写的回流产物（多为 CDN 直链），不触发注册，避免刷表。URL 自带 query（CDN 签名）与外层 query 会合并。**无鉴权**，等同 open proxy，依赖域名不公开。
 - **恢复（failback，带冷却期）**：探活周期发现 `home_node_id` 节点**连续两个周期**健康（防 flapping 反复切）→ 把 `node_id != home_node_id` 的 emby 一次性切回 `home_node_id`。多次转移后仍恢复到**原始配置节点**，而非上一次的临时节点。
 - **误报防护**：故障转移持久化写库前，会对「不健康」节点实时复核探测一次（`persistIfConfirmedDead`）；节点实际活着（health 表过期/误报）则跳过写库，本次请求仍走转移目标，等 cron 自愈。
 - 管理端显式设置节点（add/update/batch）会同时写 `node_id` 与 `home_node_id`，即重置故障转移状态。
@@ -72,10 +72,9 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ### cf-worker（wrangler secrets）
 
-`ADMIN_TOKEN`（管理 UI 登录）、`EMBY_SYNC_TOKEN`（推节点用）、`DIRECT_PROXY_TOKEN`（可选，直连代理自动注册）。
+`ADMIN_TOKEN`（管理 UI 登录）、`EMBY_SYNC_TOKEN`（推节点用）。可选环境变量 `REFERER_RULES_URL`（/img 图片代理的外部 Referer 规则 txt，默认 `https://static.laoz.org/bot/proxy_prefer.txt`）。
 
-- `DIRECT_PROXY_TOKEN` 可不设，不设则功能关闭。设置后 `/emby/<token>/http(s)://...`（原样或 URL 编码）被 cf-worker 拦截并**本地代理回传**（不 307 到节点）。**原样形式**（用户粘贴）会自动注册 emby（有节点分配默认节点，无节点注册为直连）；**编码形式**是本地代理改写的回流产物（多为 CDN 直链），不触发注册，避免刷表。URL 自带 query（CDN 签名）与外层 query 会合并。
-- **风险**：此 token 出现在 URL 路径中，任何拿到路径日志的人等同于拥有 open-proxy 权限。建议用强随机字符串。
+- 地址访问（`/emby/http(s)://...`）与图片代理（`/img`）**均无鉴权**（token 已移除），等同 open proxy，依赖 Worker 域名不公开；私网/保留地址会被 `isPrivateHost` 拦截（403）。
 
 **关键约束**：
 - `EMBY_SYNC_TOKEN` 在 cf-worker 与所有节点上必须 **byte-for-byte** 一致，不一致 → 节点 401
@@ -104,7 +103,7 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 1. **CF Worker**：`cd cf-worker && npx wrangler deployments list | head -20` → 确认最新 deployment 时间与本次推送吻合（CF Git 集成自动构建）
 2. **Go 节点**：`curl -s http://<host>:8080/__health` → 确认返回 `{"ok":true,...}`；`docker logs --tail 5 <container>` → 确认无启动错误
-3. **Direct Proxy**（如已设置 `DIRECT_PROXY_TOKEN`）：`curl -s -o /dev/null -w "%{http_code}" https://<worker>/emby/{token}/https://example.com/` → 返回后端状态码（本地代理回传，如 `200`）
+3. **地址访问 / 图片代理**：`curl -s -o /dev/null -w "%{http_code}" https://<worker>/emby/https://example.com/` → 返回后端状态码（本地代理回传，如 `200`）；`curl -s -o /dev/null -w "%{http_code}" "https://<worker>/img?url=https://httpbingo.org/image/png"` → `200`
 4. **面板验证**：`https://<worker>/emby/admin` → 节点列表应有"默认"标记，新增 emby 记录
 
 ## 提交信息

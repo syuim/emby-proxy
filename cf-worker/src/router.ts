@@ -40,7 +40,6 @@ export async function handleClientRequest(
   if (emby.node_id === LOCAL_NODE_ID) {
     return proxyLocal(
       request,
-      env,
       buildTargetUrl(emby.backend_url, subpath, url.search),
       emby.name,
       emby.backend_url,
@@ -80,8 +79,8 @@ export async function handleClientRequest(
 
 // ---------- Worker 本地代理引擎 ----------
 // 全程 Worker 中转：客户端只看到 Worker 域名。IP 透传固定 strict 模式（防 403）。
-// 改写规则：同源（emby 后端自身）→ 名称形式 /<name>/path；
-// 跨域（CDN 直链）→ token 地址形式 /<token>/<url>（token 未设则原样放行）。
+// 改写规则：同源（emby 后端自身）→ 名称形式 /emby/<name>/path；
+// 跨域（CDN 直链）→ 编码地址形式 /emby/<encodeURIComponent(url)>。
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const STATIC_ASSET_RE =
@@ -90,7 +89,6 @@ const EMBY_IMAGE_PATH_RE = /(\/Images\/|\/Icons\/|\/Branding\/|\/emby\/covers\/)
 
 async function proxyLocal(
   request: Request,
-  env: Env,
   target: string,
   prefixName: string,
   backendOrigin: string,
@@ -162,18 +160,14 @@ async function proxyLocal(
   const respHeaders = new Headers(resp.headers);
   const proxyOrigin = new URL(request.url).origin;
   const prefix = EMBY_BASE_PATH + "/" + prefixName;
-  const token = env.DIRECT_PROXY_TOKEN;
 
-  // 绝对 URL → Worker 路径：同源用名称形式，跨域用 token 地址形式（无 token 则原样）。
-  // token 形式统一编码：与用户粘贴的原样形式区分，回流请求不会触发自动注册。
-  const rewriteUrl = (u: URL): string | null => {
+  // 绝对 URL → Worker 路径：同源用名称形式，跨域用编码地址形式。
+  // 编码形式与用户粘贴的原样形式区分，回流请求不会触发自动注册。
+  const rewriteUrl = (u: URL): string => {
     if (u.origin === backendOrigin) {
       return prefix + u.pathname + u.search;
     }
-    if (token) {
-      return EMBY_BASE_PATH + "/" + token + "/" + encodeURIComponent(u.toString());
-    }
-    return null;
+    return EMBY_BASE_PATH + "/" + encodeURIComponent(u.toString());
   };
 
   // 302 拦截：重定向目标改写回 Worker，客户端不脱离代理
@@ -301,10 +295,9 @@ export async function handleDirectRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
-  const token = env.DIRECT_PROXY_TOKEN!;
 
-  // Path: /emby/<token>/<backend_url>（原样或 URL 编码，编码形式来自 302 改写）
-  const prefix = EMBY_BASE_PATH + "/" + token + "/";
+  // Path: /emby/<backend_url>（原样或 URL 编码，编码形式来自 302 改写）
+  const prefix = EMBY_BASE_PATH + "/";
   let backendUrlFull = path.startsWith(prefix) ? path.slice(prefix.length) : "";
   const rawForm = /^https?:\/\//i.test(backendUrlFull);
   if (!rawForm) {
@@ -370,9 +363,9 @@ export async function handleDirectRequest(
     }
   }
 
-  // token 访问必走本地代理。未注册的源（CDN 回流）：无名称前缀，改写全部用 token 形式
+  // 地址访问必走本地代理。未注册的源（CDN 回流）：无名称前缀，改写全部用编码地址形式
   const target = backendOrigin + parsed.pathname + combinedSearch;
-  return proxyLocal(request, env, target, emby?.name ?? "", emby ? emby.backend_url : "");
+  return proxyLocal(request, target, emby?.name ?? "", emby ? emby.backend_url : "");
 }
 
 async function generateDirectEmbyName(backendUrl: string): Promise<string> {

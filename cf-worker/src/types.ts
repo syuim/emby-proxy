@@ -58,5 +58,6 @@ export interface Env {
   EMBY_DB: D1Database;
   ADMIN_TOKEN: string;
   EMBY_SYNC_TOKEN: string;
-  DIRECT_PROXY_TOKEN?: string;
+  // /img 图片代理外部 Referer 规则文件 URL（可选，覆盖内置默认）
+  REFERER_RULES_URL?: string;
 }
