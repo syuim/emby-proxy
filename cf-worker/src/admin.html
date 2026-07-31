@@ -278,7 +278,7 @@
         font-family: ui-monospace, "SF Mono", Menlo, monospace;
         line-height: 1.6;
       }
-      .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .actions { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; white-space: nowrap; }
 
       /* ============ Table ============ */
       .table-wrap {
@@ -456,7 +456,7 @@
       .stack-name strong { font-weight: 600; letter-spacing: -0.01em; }
       td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .only-sm { display: none; }
-      .col-actions { width: 160px; }
+      .col-actions { width: 1%; white-space: nowrap; }
 
       /* ============ Responsive ============ */
       @media (max-width: 768px) {
@@ -600,6 +600,16 @@
         return String(s ?? "").replace(/[&<>"']/g, (c) => ({
           "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
         })[c]);
+      }
+      function relTime(iso) {
+        if (!iso) return "-";
+        const t = new Date(iso).getTime();
+        if (Number.isNaN(t)) return iso;
+        const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+        if (s < 60) return "刚刚";
+        if (s < 3600) return Math.floor(s / 60) + " 分钟前";
+        if (s < 86400) return Math.floor(s / 3600) + " 小时前";
+        return Math.floor(s / 86400) + " 天前";
       }
       async function api(path, opts) {
         const resp = await fetch(path, {
@@ -1010,7 +1020,7 @@
                             </div></td>
                             <td><input class="row-url mono" value="${escapeHtml(n.public_url)}" /></td>
                             <td>${healthBadge(n.id)}</td>
-                            <td class="mono">${escapeHtml(h.last_check ?? "-")}</td>
+                            <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
                               <button class="btn btn-ghost" data-act="cancel">取消</button>
@@ -1023,9 +1033,9 @@
                           <td><div class="stack-name">
                             <strong>${escapeHtml(n.name)}</strong>
                           </div></td>
-                          <td class="mono">${escapeHtml(n.public_url)}</td>
+                          <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
                           <td>${healthBadge(n.id)}</td>
-                          <td class="mono">${escapeHtml(h.last_check ?? "-")}</td>
+                          <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="up" ${gi === 0 ? "disabled" : ""} title="上移">↑</button>
                             <button class="btn btn-ghost" data-act="down" ${gi === state.nodes.length - 1 ? "disabled" : ""} title="下移">↓</button>
