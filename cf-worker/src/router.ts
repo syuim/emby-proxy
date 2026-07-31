@@ -1,7 +1,7 @@
 import { LOCAL_NODE_ID, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
 import { readEmbys, readHealth, readNodes, writeEmbys } from "./storage";
 import { buildSnapshot, pushSnapshotToAll } from "./sync";
-import { mergeSyncResults } from "./health";
+import { immediateProbe, mergeSyncResults } from "./health";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
 
 
@@ -324,43 +324,57 @@ async function chooseNode(
       `node '${emby.node_id}' unhealthy for emby='${emby.name}', failover to '${pick.id}' (home='${emby.home_node_id}')`,
     );
     // 持久化转移：该不健康节点关联的所有 emby 一并切到新节点，后续请求直达；
-    // home_node_id 保持原始配置，探活确认原节点恢复后由 runHealthCycle 切回
+    // home_node_id 保持原始配置，探活确认原节点恢复后由 runHealthCycle 切回。
+    // 写库前实时复核探测一次，防 health 表误报/过期导致整节点 emby 被误搬。
     const unhealthyId = emby.node_id;
     const pickId = pick.id;
     ctx.waitUntil(
-      env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?")
-        .bind(pickId, unhealthyId)
-        .run()
-        .then(
-          (r) =>
-            console.log(
-              `[failover] moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${pickId}'`,
-            ),
-          (err) => console.error(`[failover] persist failed: ${err}`),
-        ),
+      persistIfConfirmedDead(env, nodes, unhealthyId, pickId),
     );
     return pick;
   }
 
   // 全部不健康：持久化为直连（node_id=''），后续请求不再逐个探健康，
-  // 直接 307 backend_url；home_node_id 不动，探活发现原节点恢复后由 failback 切回
+  // 直接 307 backend_url；home_node_id 不动，探活发现原节点恢复后由 failback 切回。
+  // 同样先复核探测再写库。
   const unhealthyId = emby.node_id;
   console.warn(
     `all nodes unhealthy for emby='${emby.name}', fallback to direct (home='${emby.home_node_id}')`,
   );
-  ctx.waitUntil(
-    env.EMBY_DB.prepare("UPDATE embys SET node_id = '' WHERE node_id = ?")
-      .bind(unhealthyId)
-      .run()
-      .then(
-        (r) =>
-          console.log(
-            `[failover] moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to direct`,
-          ),
-        (err) => console.error(`[failover] persist direct failed: ${err}`),
-      ),
-  );
+  ctx.waitUntil(persistIfConfirmedDead(env, nodes, unhealthyId, ""));
   return null;
+}
+
+// 误报防护：持久化故障转移前，对「不健康」节点实时探测一次确认。
+// 节点其实活着（health 表过期/误报）→ 跳过写库，等 cron 自愈；确认挂了才搬迁。
+async function persistIfConfirmedDead(
+  env: Env,
+  nodes: NodeRecord[],
+  unhealthyId: string,
+  targetId: string,
+): Promise<void> {
+  try {
+    const node = nodes.find((n) => n.id === unhealthyId);
+    if (node) {
+      const probe = await immediateProbe(node, env.EMBY_SYNC_TOKEN, 1);
+      if (probe.healthy) {
+        console.log(
+          `[failover] probe says '${unhealthyId}' alive, skip persisting (stale health)`,
+        );
+        return;
+      }
+    }
+    const r = await env.EMBY_DB.prepare(
+      "UPDATE embys SET node_id = ? WHERE node_id = ?",
+    )
+      .bind(targetId, unhealthyId)
+      .run();
+    console.log(
+      `[failover] confirmed dead, moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${targetId || "direct"}'`,
+    );
+  } catch (err) {
+    console.error(`[failover] persist failed: ${err}`);
+  }
 }
 
 export function buildTargetUrl(publicUrl: string, path: string, search: string): string {
