@@ -17,6 +17,9 @@ export const THROTTLE_PROBE_INTERVAL_MS = 30 * 60 * 1000;
 
 export const EMBY_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 
+// emby.node_id 哨兵值：Worker 本地代理（不 307，Worker 直接 fetch 后端回传）
+export const LOCAL_NODE_ID = "local";
+
 export const RESERVED_NAMES = new Set([
   "admin",
   "api",

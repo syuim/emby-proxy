@@ -1,4 +1,4 @@
-import { EMBY_NAME_RE, RESERVED_NAMES } from "../constants";
+import { EMBY_NAME_RE, LOCAL_NODE_ID, RESERVED_NAMES } from "../constants";
 import {
   readEmbys,
   readHealth,
@@ -288,8 +288,8 @@ export async function handleBatchUpdateEmbys(
 
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
 
-  // 验证 node_id 存在（空=直连）
-  if (node_id && !nodes.nodes.some((n) => n.id === node_id)) {
+  // 验证 node_id 存在（空=直连，local=Worker 本地代理）
+  if (node_id && node_id !== LOCAL_NODE_ID && !nodes.nodes.some((n) => n.id === node_id)) {
     return json(400, { error: `node_id '${node_id}' 不存在` });
   }
 
@@ -428,7 +428,7 @@ function checkNodeRefs(
   e: Omit<EmbyRecord, "created_at">,
   nodes: NodesKV,
 ): string | null {
-  if (!e.node_id) return null;
+  if (!e.node_id || e.node_id === LOCAL_NODE_ID) return null;
   if (!nodes.nodes.some((n) => n.id === e.node_id)) {
     return `node_id '${e.node_id}' 不存在`;
   }

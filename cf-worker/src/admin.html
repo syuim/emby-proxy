@@ -637,14 +637,17 @@
       }
       function nodeName(id) {
         if (!id) return "直连（无代理）";
+        if (id === "local") return "本地代理（Worker）";
         const n = state.nodes.find((x) => x.id === id);
         return n ? n.name : id;
       }
       function nodeLabel(id) {
         if (!id) return '直连<span class="hide-sm">（无代理）</span>';
+        if (id === "local") return '本地代理<span class="hide-sm">（Worker）</span>';
         return escapeHtml(nodeName(id));
       }
       function healthBadge(nodeId) {
+        if (nodeId === "local") return '<span class="badge ok">本地</span>';
         const h = state.health[nodeId];
         if (!h) return '<span class="badge unknown">未检测</span>';
         if (h.healthy) return '<span class="badge ok">健康</span>';
@@ -803,6 +806,7 @@
         const batchOptionsHtml =
           '<option value="__unset" selected>请选择节点…</option>' +
           '<option value="">直连（无代理）</option>' +
+          '<option value="local">本地代理（Worker）</option>' +
           state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
         const pageSize = 15;
         const totalPages = Math.max(1, Math.ceil(state.embys.length / pageSize));
@@ -840,6 +844,7 @@
                             <td>
                               <select class="row-node">
                                 <option value="">直连（无代理）</option>
+                                <option value="local" ${e.node_id === "local" ? "selected" : ""}>本地代理（Worker）</option>
                                 ${state.nodes.map((n) => `<option value="${escapeHtml(n.id)}" ${n.id === e.node_id ? "selected" : ""}>${escapeHtml(n.name)}</option>`).join("")}
                               </select>
                             </td>
@@ -1132,7 +1137,7 @@
         });
       }
       function openAddEmbyModal() {
-        const optionsHtml = '<option value="">直连（无代理）</option>' + state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
+        const optionsHtml = '<option value="">直连（无代理）</option>' + '<option value="local">本地代理（Worker）</option>' + state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
         const root = document.getElementById("modal-root");
         root.innerHTML = `
           <div class="modal-overlay">

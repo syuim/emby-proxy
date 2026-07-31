@@ -20,6 +20,7 @@ import type {
   HealthKV,
   NodeHealth,
   NodeRecord,
+  NodesKV,
   PushResult,
 } from "./types";
 
@@ -88,8 +89,9 @@ export async function runHealthCycle(
   }
   await writeHealth(env, newHealth, prevHealth);
 
-  // 恢复机制：原始配置节点恢复健康 → 把故障转移出去的 emby 切回 home_node_id
-  ctx.waitUntil(restoreRecoveredEmbys(env, embysKV, newHealth));
+  // 恢复机制：home 恢复健康 → 切回；兜底直连的 emby 在 home 未恢复
+  // 但出现其他健康节点时，先转移到该节点
+  ctx.waitUntil(restoreRecoveredEmbys(env, embysKV, nodesKV, newHealth));
 
   // 补齐：节点 applied_version 与 KV embys.version 不一致（或未知）时异步补推
   ctx.waitUntil(
@@ -98,14 +100,19 @@ export async function runHealthCycle(
 }
 
 /**
- * 故障恢复切回：emby 的 node_id 因故障转移偏离 home_node_id（可能经过多次转移），
- * 只要原始配置节点恢复健康，就一次性切回 home_node_id，而非上一次的临时节点。
+ * 故障恢复切回：emby 的 node_id 因故障转移偏离 home_node_id（可能经过多次转移
+ * 或兜底降级为直连 ''），只要原始配置节点恢复健康，就一次性切回 home_node_id。
+ * home 未恢复但兜底直连的 emby，若有其他健康节点则按排序转移过去（不再裸奔直连）。
  */
 async function restoreRecoveredEmbys(
   env: Env,
   embysKV: EmbysKV,
+  nodesKV: NodesKV,
   health: HealthKV,
 ): Promise<void> {
+  const stmts: D1PreparedStatement[] = [];
+  const logs: string[] = [];
+
   const recoveredHomeIds = new Set(
     embysKV.embys
       .filter(
@@ -116,17 +123,51 @@ async function restoreRecoveredEmbys(
       )
       .map((e) => e.home_node_id),
   );
-  if (recoveredHomeIds.size === 0) return;
+  for (const id of recoveredHomeIds) {
+    stmts.push(
+      env.EMBY_DB.prepare(
+        "UPDATE embys SET node_id = home_node_id WHERE home_node_id = ? AND node_id != home_node_id",
+      ).bind(id),
+    );
+    logs.push(`failback->${id}`);
+  }
 
-  const stmts = [...recoveredHomeIds].map((id) =>
-    env.EMBY_DB.prepare(
-      "UPDATE embys SET node_id = home_node_id WHERE home_node_id = ? AND node_id != home_node_id",
-    ).bind(id),
+  // 兜底直连救援：node_id=''（曾全灭降级）且 home 仍不健康 → 按排序从
+  // home 位置往下挑第一个健康节点转移
+  const strandedHomeIds = new Set(
+    embysKV.embys
+      .filter(
+        (e) =>
+          e.node_id === "" &&
+          e.home_node_id &&
+          !recoveredHomeIds.has(e.home_node_id) &&
+          nodesKV.nodes.some((n) => n.id === e.home_node_id),
+      )
+      .map((e) => e.home_node_id),
   );
+  for (const homeId of strandedHomeIds) {
+    const startIdx = nodesKV.nodes.findIndex((n) => n.id === homeId);
+    let pick: string | null = null;
+    for (let i = 1; i <= nodesKV.nodes.length; i++) {
+      const candidate = nodesKV.nodes[(startIdx + i) % nodesKV.nodes.length]!;
+      if (candidate.id !== homeId && health.nodes[candidate.id]?.healthy) {
+        pick = candidate.id;
+        break;
+      }
+    }
+    if (pick) {
+      stmts.push(
+        env.EMBY_DB.prepare(
+          "UPDATE embys SET node_id = ? WHERE home_node_id = ? AND node_id = ''",
+        ).bind(pick, homeId),
+      );
+      logs.push(`rescue direct(home=${homeId})->${pick}`);
+    }
+  }
+
+  if (stmts.length === 0) return;
   await env.EMBY_DB.batch(stmts);
-  console.log(
-    `[failback] restored embys to recovered home nodes: ${[...recoveredHomeIds].join(",")}`,
-  );
+  console.log(`[failback] ${logs.join(", ")}`);
 }
 
 async function probeNode(

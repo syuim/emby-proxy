@@ -1,4 +1,4 @@
-import { RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
+import { LOCAL_NODE_ID, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
 import { readEmbys, readHealth, readNodes, writeEmbys } from "./storage";
 import { buildSnapshot, pushSnapshotToAll } from "./sync";
 import { mergeSyncResults } from "./health";
@@ -34,6 +34,12 @@ export async function handleClientRequest(
     return notFound(`unknown emby '${embyName}'`);
   }
 
+  // Worker 本地代理：不 307，Worker 直接 fetch 后端回传
+  if (emby.node_id === LOCAL_NODE_ID) {
+    const subpath = "/" + segments.slice(1).join("/");
+    return proxyLocal(request, buildTargetUrl(emby.backend_url, subpath, url.search));
+  }
+
   const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
   if (!node) {
     // 所有代理节点不可用 → 直连 emby backend
@@ -62,6 +68,19 @@ export async function handleClientRequest(
       Location: target,
       "Cache-Control": "no-store",
     },
+  });
+}
+
+// ---------- Worker 本地代理（node_id = "local"） ----------
+
+function proxyLocal(request: Request, target: string): Promise<Response> {
+  const headers = new Headers(request.headers);
+  headers.delete("host");
+  return fetch(target, {
+    method: request.method,
+    headers,
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+    redirect: "manual",
   });
 }
 
@@ -323,7 +342,24 @@ async function chooseNode(
     return pick;
   }
 
-  // 全部不健康：由调用方兜底直连 backend_url
+  // 全部不健康：持久化为直连（node_id=''），后续请求不再逐个探健康，
+  // 直接 307 backend_url；home_node_id 不动，探活发现原节点恢复后由 failback 切回
+  const unhealthyId = emby.node_id;
+  console.warn(
+    `all nodes unhealthy for emby='${emby.name}', fallback to direct (home='${emby.home_node_id}')`,
+  );
+  ctx.waitUntil(
+    env.EMBY_DB.prepare("UPDATE embys SET node_id = '' WHERE node_id = ?")
+      .bind(unhealthyId)
+      .run()
+      .then(
+        (r) =>
+          console.log(
+            `[failover] moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to direct`,
+          ),
+        (err) => console.error(`[failover] persist direct failed: ${err}`),
+      ),
+  );
   return null;
 }
 
