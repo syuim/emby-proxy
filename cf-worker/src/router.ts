@@ -1,4 +1,4 @@
-import { LOCAL_NODE_ID, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
+import { HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
 import { readEmbys, readHealth, readNodes, writeEmbys } from "./storage";
 import { buildSnapshot, pushSnapshotToAll } from "./sync";
 import { immediateProbe, mergeSyncResults } from "./health";
@@ -290,6 +290,33 @@ function filterUpstreamHeaders(src: Headers): Headers {
   return out;
 }
 
+// 请求级存活探测：GET /__health，3s 超时，isolate 内存缓存 1 分钟。
+// 节点失败的判定以此为准（请求驱动、秒级发现），不依赖 cron 探活周期。
+const aliveCache = new Map<string, { alive: boolean; ts: number }>();
+const ALIVE_CACHE_TTL_MS = 60_000;
+
+async function probeAlive(node: NodeRecord): Promise<boolean> {
+  const hit = aliveCache.get(node.id);
+  if (hit && Date.now() - hit.ts < ALIVE_CACHE_TTL_MS) return hit.alive;
+
+  let alive = false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetch(
+      node.public_url.replace(/\/$/, "") + NODE_HEALTH_PATH,
+      { signal: controller.signal },
+    );
+    alive = resp.ok;
+  } catch {
+    alive = false;
+  } finally {
+    clearTimeout(timer);
+  }
+  aliveCache.set(node.id, { alive, ts: Date.now() });
+  return alive;
+}
+
 async function chooseNode(
   env: Env,
   emby: EmbyRecord,
@@ -301,20 +328,19 @@ async function chooseNode(
     return null;
   }
 
-  const health = await readHealth(env);
   const primary = nodes.find((n) => n.id === emby.node_id);
 
-  if (primary && health.nodes[primary.id]?.healthy) {
+  if (primary && (await probeAlive(primary))) {
     return primary;
   }
 
-  // 当前节点不健康：按排序从当前节点位置依次往下找健康节点（到末尾回绕）。
+  // 当前节点探测不通：按排序从当前节点位置依次往下找活的（到末尾回绕）。
   // nodes 已由 readNodes 按 sort_order 排好序。
   const startIdx = nodes.findIndex((n) => n.id === emby.node_id);
   let pick: NodeRecord | null = null;
   for (let i = 1; i <= nodes.length; i++) {
     const candidate = nodes[(startIdx + i) % nodes.length]!;
-    if (candidate.id !== emby.node_id && health.nodes[candidate.id]?.healthy) {
+    if (candidate.id !== emby.node_id && (await probeAlive(candidate))) {
       pick = candidate;
       break;
     }

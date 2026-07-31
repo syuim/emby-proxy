@@ -43,7 +43,8 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 `embys` 有两个节点字段：`node_id` = 当前生效节点（故障转移会改写），`home_node_id` = 原始配置节点（只有显式改配置才更新，是恢复切回的目标）。
 
-- **转移（sticky）**：emby 的 `node_id` 不健康 → router 按节点 `sort_order` 排序，从当前节点位置**依次往下**（到末尾回绕）挑第一个健康的，并把该不健康节点关联的**所有 emby** 的 `node_id` 定向 UPDATE 为新节点（`home_node_id` 不动），后续请求直接命中新节点。转移可能连锁发生多次。节点排序在管理 UI 节点页用 ↑/↓ 调整（`POST /admin/api/nodes/reorder`）。
+- **失败判定（请求驱动）**：router 选节点时对目标节点实时探测 `GET /__health`（3s 超时），isolate 内存缓存 1 分钟。探测不通立即按排序切换，**不依赖 cron 探活周期**（节点挂后秒级发现，最坏一个请求等 3s）。cron 探活仍负责 failback/救援判定与配置补推。
+- **转移（sticky）**：emby 的 `node_id` 探测不通 → router 按节点 `sort_order` 排序，从当前节点位置**依次往下**（到末尾回绕）挑第一个探测存活的，并把该故障节点关联的**所有 emby** 的 `node_id` 定向 UPDATE 为新节点（`home_node_id` 不动），后续请求直接命中新节点。转移可能连锁发生多次。节点排序在管理 UI 节点页用 ↑/↓ 调整（`POST /admin/api/nodes/reorder`）。
 - **兜底（也持久化）**：全部节点不健康 → 307 直连 emby 的 `backend_url`（不返 503），并把该不健康节点关联的所有 emby 的 `node_id` UPDATE 为 `''`（直连），后续请求不再逐个探健康；探活周期负责恢复：home 恢复 → 切回；home 未恢复但有其他健康节点 → 按排序转移过去。
 - **本地代理**：`node_id = 'local'` 是哨兵值（非真实节点），表示 Worker 本地代理——不 307，Worker 直接 fetch `backend_url` 回传（同 /tmdb 方式）。仅显式配置可用，不参与故障转移/探活。
 - **恢复（failback，带冷却期）**：探活周期发现 `home_node_id` 节点**连续两个周期**健康（防 flapping 反复切）→ 把 `node_id != home_node_id` 的 emby 一次性切回 `home_node_id`。多次转移后仍恢复到**原始配置节点**，而非上一次的临时节点。
