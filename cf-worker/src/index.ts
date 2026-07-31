@@ -32,7 +32,7 @@ export default {
       }
       // 地址访问 /emby/http(s)://...（原样或 URL 编码）→ 必走本地代理
       if (/^https?(:\/\/|%3A)/i.test(rest)) {
-        return handleDirectRequest(request, env, ctx);
+        return handleDirectRequest(request, env);
       }
       return handleClientRequest(request, env, ctx);
     }

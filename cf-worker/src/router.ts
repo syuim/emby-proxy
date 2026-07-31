@@ -1,7 +1,6 @@
 import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
-import { readEmbys, readHealth, readNodes, writeEmbys } from "./storage";
-import { buildSnapshot, pushSnapshotToAll } from "./sync";
-import { immediateProbe, mergeSyncResults } from "./health";
+import { readEmbys, readNodes, writeEmbys } from "./storage";
+import { immediateProbe } from "./health";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
 
 
@@ -291,7 +290,6 @@ export async function handleTmdbRequest(request: Request): Promise<Response> {
 export async function handleDirectRequest(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -326,13 +324,11 @@ export async function handleDirectRequest(
     ? parsed.search + (url.search ? "&" + url.search.slice(1) : "")
     : url.search;
 
-  const [embysKV, nodesKV] = await Promise.all([readEmbys(env), readNodes(env)]);
+  const embysKV = await readEmbys(env);
 
   let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
   // 只在原样形式（用户粘贴入口）时自动注册；编码形式是改写回流（多为 CDN），不注册避免刷表
   if (!emby && rawForm) {
-    const anyNode = nodesKV.nodes[0];
-
     const name = await generateDirectEmbyName(backendOrigin);
     if (embysKV.embys.some((e) => e.name === name)) {
       const fresh = await readEmbys(env);
@@ -343,23 +339,17 @@ export async function handleDirectRequest(
     }
 
     if (!emby) {
+      // 地址访问永远本地代理，节点上没有它的配置 → node_id 固定 local。
+      // 节点配置未变，故不 bump version、不 fan-out（否则 cron 会误判补推）。
       emby = {
         name,
         backend_url: backendOrigin,
-        node_id: anyNode?.id ?? "",
-        home_node_id: anyNode?.id ?? "",
+        node_id: LOCAL_NODE_ID,
+        home_node_id: LOCAL_NODE_ID,
         created_at: new Date().toISOString(),
       };
-      embysKV.version += 1;
       embysKV.embys.push(emby);
       await writeEmbys(env, embysKV);
-
-      ctx.waitUntil((async () => {
-        const snapshot = buildSnapshot(embysKV);
-        const results = await pushSnapshotToAll(nodesKV.nodes, snapshot, env.EMBY_SYNC_TOKEN, "direct-register");
-        const health = await readHealth(env);
-        await mergeSyncResults(env, health, results);
-      })());
     }
   }
 
