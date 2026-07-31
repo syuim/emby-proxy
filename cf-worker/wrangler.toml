@@ -1,6 +1,9 @@
 name = "emby-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-09-25"
+# TMDB API 也托管在 Cloudflare 上，Worker→Worker 子请求会被拦截报 1042；
+# 此 flag 让子请求严格走公网，绕开该限制
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = false
 account_id = "9a2c5f84e3346b4d2310792e4f759881"
 
