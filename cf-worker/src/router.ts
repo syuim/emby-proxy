@@ -290,14 +290,18 @@ function filterUpstreamHeaders(src: Headers): Headers {
   return out;
 }
 
-// 请求级存活探测：GET /__health，3s 超时，isolate 内存缓存 1 分钟。
+// 请求级存活探测：GET /__health，3s 超时，isolate 内存缓存。
+// 非对称 TTL：活 30s（控制节点刚挂时的盲区），死 15s（更快重试发现恢复）。
 // 节点失败的判定以此为准（请求驱动、秒级发现），不依赖 cron 探活周期。
 const aliveCache = new Map<string, { alive: boolean; ts: number }>();
-const ALIVE_CACHE_TTL_MS = 60_000;
+const ALIVE_TTL_OK_MS = 30_000;
+const ALIVE_TTL_FAIL_MS = 15_000;
 
 async function probeAlive(node: NodeRecord): Promise<boolean> {
   const hit = aliveCache.get(node.id);
-  if (hit && Date.now() - hit.ts < ALIVE_CACHE_TTL_MS) return hit.alive;
+  if (hit && Date.now() - hit.ts < (hit.alive ? ALIVE_TTL_OK_MS : ALIVE_TTL_FAIL_MS)) {
+    return hit.alive;
+  }
 
   let alive = false;
   const controller = new AbortController();
@@ -334,13 +338,18 @@ async function chooseNode(
     return primary;
   }
 
-  // 当前节点探测不通：按排序从当前节点位置依次往下找活的（到末尾回绕）。
+  // 当前节点探测不通：并行发起其余节点探测，按排序从当前节点位置依次往下
+  // await，第一个活的立即返回（不等更慢/超时的后位节点；全灭最坏 3s 而非 3s×N）。
   // nodes 已由 readNodes 按 sort_order 排好序。
   const startIdx = nodes.findIndex((n) => n.id === emby.node_id);
+  const probes = new Map<string, Promise<boolean>>();
+  for (const n of nodes) {
+    if (n.id !== emby.node_id) probes.set(n.id, probeAlive(n));
+  }
   let pick: NodeRecord | null = null;
   for (let i = 1; i <= nodes.length; i++) {
     const candidate = nodes[(startIdx + i) % nodes.length]!;
-    if (candidate.id !== emby.node_id && (await probeAlive(candidate))) {
+    if (candidate.id !== emby.node_id && (await probes.get(candidate.id))) {
       pick = candidate;
       break;
     }
