@@ -19,7 +19,8 @@ import {
 
 export async function routeAdmin(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname;
+  // 挂载点为 /emby/admin：剥掉 /emby 前缀后按 /admin/* 匹配
+  const path = url.pathname.replace(/^\/emby(?=\/admin)/, "");
   const method = request.method;
 
   // Static UI

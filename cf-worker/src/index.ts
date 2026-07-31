@@ -15,24 +15,21 @@ export default {
     }
 
     if (url.pathname === "/") {
-      return Response.redirect(new URL("/admin", url).toString(), 302);
+      return Response.redirect(new URL(EMBY_BASE_PATH + "/admin", url).toString(), 302);
     }
 
-    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-      return routeAdmin(request, env, ctx);
-    }
-
-    if (url.pathname === "/tmdb" || url.pathname.startsWith("/tmdb/")) {
-      return handleTmdbRequest(request);
-    }
-
-    // 一级命名空间：/emby/<name>/... 或 /emby/<token>/<url>
+    // 一级命名空间 /emby：admin、tmdb、token 地址访问、名称访问
     if (url.pathname.startsWith(EMBY_BASE_PATH + "/")) {
-      if (env.DIRECT_PROXY_TOKEN) {
-        const second = url.pathname.slice(EMBY_BASE_PATH.length + 1).split("/")[0];
-        if (second === env.DIRECT_PROXY_TOKEN) {
-          return handleDirectRequest(request, env, ctx);
-        }
+      const second = url.pathname.slice(EMBY_BASE_PATH.length + 1).split("/")[0];
+
+      if (second === "admin") {
+        return routeAdmin(request, env, ctx);
+      }
+      if (second === "tmdb") {
+        return handleTmdbRequest(request);
+      }
+      if (env.DIRECT_PROXY_TOKEN && second === env.DIRECT_PROXY_TOKEN) {
+        return handleDirectRequest(request, env, ctx);
       }
       return handleClientRequest(request, env, ctx);
     }

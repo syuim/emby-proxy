@@ -621,14 +621,14 @@
         return data;
       }
       async function checkAuth() {
-        try { await api("/admin/api/me"); return true; }
+        try { await api("/emby/admin/api/me"); return true; }
         catch { return false; }
       }
       async function refreshAll() {
         const [n, e, h] = await Promise.all([
-          api("/admin/api/nodes"),
-          api("/admin/api/embys"),
-          api("/admin/api/health"),
+          api("/emby/admin/api/nodes"),
+          api("/emby/admin/api/embys"),
+          api("/emby/admin/api/health"),
         ]);
         state.nodes = n.nodes || [];
         state.embys = e.embys || [];
@@ -661,7 +661,7 @@
       }
       async function probeAndReport() {
         try {
-          const h = await api("/admin/api/probe", { method: "POST" });
+          const h = await api("/emby/admin/api/probe", { method: "POST" });
           await refreshAll();
           const entries = Object.entries(h.nodes || {});
           if (entries.length === 0) {
@@ -685,7 +685,7 @@
       // 与节点页的节点健康探测区分开
       async function probeEmbysAndReport() {
         try {
-          const h = await api("/admin/api/probe", { method: "POST" });
+          const h = await api("/emby/admin/api/probe", { method: "POST" });
           await refreshAll();
           if (state.embys.length === 0) {
             toast("探测完成：暂无 emby", "ok");
@@ -712,7 +712,7 @@
       }
       async function resyncAndReport() {
         try {
-          const r = await api("/admin/api/sync", { method: "POST" });
+          const r = await api("/emby/admin/api/sync", { method: "POST" });
           await refreshAll();
           const results = r.push_results || [];
           const failed = results.filter((x) => x.status !== "ok");
@@ -758,7 +758,7 @@
         $app.querySelector("#btn-theme").onclick = () => { applyTheme(nextTheme(state.theme)); render(); };
         $app.querySelector("#btn-refresh").onclick = () => refreshAll().catch((e) => toast(e.message, "err"));
         $app.querySelector("#btn-logout").onclick = async () => {
-          await fetch("/admin/api/logout", { method: "POST" });
+          await fetch("/emby/admin/api/logout", { method: "POST" });
           state.authed = false;
           render();
         };
@@ -789,7 +789,7 @@
         $app.querySelector("#btn-login").onclick = async () => {
           const t = $app.querySelector("#login-token").value;
           try {
-            await api("/admin/api/login", { method: "POST", body: JSON.stringify({ token: t }) });
+            await api("/emby/admin/api/login", { method: "POST", body: JSON.stringify({ token: t }) });
             state.authed = true;
             await refreshAll();
           } catch (e) { toast(e.message, "err"); }
@@ -899,7 +899,7 @@
             tr.querySelector('[data-act="del"]').onclick = async () => {
               if (!confirm(`确认删除 emby '${name}'？`)) return;
               try {
-                await api("/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
+                await api("/emby/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
                 toast("已删除", "ok");
                 await refreshAll();
               } catch (e) { toast(e.message, "err"); }
@@ -913,7 +913,7 @@
               const newNode = $node.value;
               if (!newBackend) { toast("backend_url 不能为空", "err"); return; }
               try {
-                await api("/admin/api/embys/" + encodeURIComponent(name), {
+                await api("/emby/admin/api/embys/" + encodeURIComponent(name), {
                   method: "PUT",
                   body: JSON.stringify({ name: newName, backend_url: newBackend, node_id: newNode }),
                 });
@@ -973,7 +973,7 @@
             const target = nodeId === "" ? "直连（无代理）" : nodeName(nodeId);
             if (!confirm(`将 ${names.length} 个 emby 调整到「${target}」？`)) return;
             try {
-              await api("/admin/api/embys", {
+              await api("/emby/admin/api/embys", {
                 method: "PUT",
                 body: JSON.stringify({ names, node_id: nodeId }),
               });
@@ -1080,7 +1080,7 @@
             tr.querySelector('[data-act="del"]').onclick = async () => {
               if (!confirm("确认删除节点？")) return;
               try {
-                await api("/admin/api/nodes/" + encodeURIComponent(id), { method: "DELETE" });
+                await api("/emby/admin/api/nodes/" + encodeURIComponent(id), { method: "DELETE" });
                 toast("已删除", "ok");
                 await refreshAll();
               } catch (e) { toast(e.message, "err"); }
@@ -1093,7 +1093,7 @@
               const url = $url.value.trim();
               if (!name || !url) { toast("名称与 public_url 不能为空", "err"); return; }
               try {
-                await api("/admin/api/nodes/" + encodeURIComponent(id), {
+                await api("/emby/admin/api/nodes/" + encodeURIComponent(id), {
                   method: "PUT",
                   body: JSON.stringify({ name, public_url: url }),
                 });
@@ -1117,7 +1117,7 @@
         if (i < 0 || j < 0 || j >= ids.length) return;
         [ids[i], ids[j]] = [ids[j], ids[i]];
         try {
-          await api("/admin/api/nodes/reorder", {
+          await api("/emby/admin/api/nodes/reorder", {
             method: "POST",
             body: JSON.stringify({ ids }),
           });
@@ -1177,7 +1177,7 @@
           const backend = root.querySelector("#e-backend").value.trim();
           const nodeId = root.querySelector("#e-node").value;
           try {
-            await api("/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, node_id: nodeId }) });
+            await api("/emby/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, node_id: nodeId }) });
             toast("已添加并推送到所有节点", "ok");
             closeModal();
             await refreshAll();
@@ -1219,7 +1219,7 @@
           const name = root.querySelector("#n-name").value.trim();
           const url = root.querySelector("#n-url").value.trim();
           try {
-            await api("/admin/api/nodes", { method: "POST", body: JSON.stringify({ name, public_url: url }) });
+            await api("/emby/admin/api/nodes", { method: "POST", body: JSON.stringify({ name, public_url: url }) });
             toast("已添加节点", "ok");
             closeModal();
             await refreshAll();

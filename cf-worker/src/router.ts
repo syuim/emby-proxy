@@ -276,7 +276,7 @@ const TMDB_API_ORIGIN = "https://api.themoviedb.org";
 
 export async function handleTmdbRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  const subpath = url.pathname.slice("/tmdb".length) || "/";
+  const subpath = url.pathname.slice((EMBY_BASE_PATH + "/tmdb").length) || "/";
   const target = TMDB_API_ORIGIN + subpath + url.search;
 
   const headers = new Headers();

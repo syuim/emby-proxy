@@ -35,9 +35,9 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 
 ## URL 命名空间与命名规则
 
-一级路径按功能划分（**硬切换，无旧路径兼容**）：`/emby/...`（emby 代理，见下）、`/tmdb/...`（TMDB 反代）、`/admin`（管理 UI/API）、`/__health`；其余一级路径 404，后续新功能（图片代理等）继续占用新的一级路径。
+一级路径按功能划分（**硬切换，无旧路径兼容**）：目前 emby 相关全部挂在 `/emby/...` 下——`/emby/<name>/path`（名称访问）、`/emby/<token>/<url>`（token 地址访问）、`/emby/tmdb/...`（TMDB 反代）、`/emby/admin`（管理 UI/API）。根路径 `/` 302 到 `/emby/admin`，`/__health` 保留在顶层；其余一级路径 404，后续新功能（图片代理等）占用新的一级路径。
 
-emby 功能下只有两种形式：`/emby/<name>/path`（名称访问）与 `/emby/<token>/<url>`（token 地址访问）。**节点协议路径不含 `/emby` 前缀**：307 到节点仍是 `/<name>/subpath`（proxy-go 契约不变）。
+**节点协议路径不含 `/emby` 前缀**：307 到节点仍是 `/<name>/subpath`（proxy-go 契约不变，节点的 `/admin/sync` 也与此无关）。
 
 不能作为 `emby_name` 的保留字：`admin / api / health / __health / favicon.ico / robots.txt / .well-known / _ / tmdb`。
 
@@ -105,7 +105,7 @@ emby 功能下只有两种形式：`/emby/<name>/path`（名称访问）与 `/em
 1. **CF Worker**：`cd cf-worker && npx wrangler deployments list | head -20` → 确认最新 deployment 时间与本次推送吻合（CF Git 集成自动构建）
 2. **Go 节点**：`curl -s http://<host>:8080/__health` → 确认返回 `{"ok":true,...}`；`docker logs --tail 5 <container>` → 确认无启动错误
 3. **Direct Proxy**（如已设置 `DIRECT_PROXY_TOKEN`）：`curl -s -o /dev/null -w "%{http_code}" https://<worker>/emby/{token}/https://example.com/` → 返回后端状态码（本地代理回传，如 `200`）
-4. **面板验证**：`https://<worker>/admin` → 节点列表应有"默认"标记，新增 emby 记录
+4. **面板验证**：`https://<worker>/emby/admin` → 节点列表应有"默认"标记，新增 emby 记录
 
 ## 提交信息
 
