@@ -998,9 +998,10 @@
                     <th class="col-actions">操作</th>
                   </tr></thead>
                   <tbody>
-                    ${paged.map((n) => {
+                    ${paged.map((n, pi) => {
                       const h = state.health[n.id] || {};
                       const editing = state.editingNode === n.id;
+                      const gi = page * pageSize + pi;
                       if (editing) {
                         return `
                           <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
@@ -1026,6 +1027,8 @@
                           <td>${healthBadge(n.id)}</td>
                           <td class="mono">${escapeHtml(h.last_check ?? "-")}</td>
                           <td class="actions">
+                            <button class="btn btn-ghost" data-act="up" ${gi === 0 ? "disabled" : ""} title="上移">↑</button>
+                            <button class="btn btn-ghost" data-act="down" ${gi === state.nodes.length - 1 ? "disabled" : ""} title="下移">↓</button>
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
                             <button class="btn btn-danger" data-act="del">删除</button>
                           </td>
@@ -1053,6 +1056,8 @@
           const id = tr.dataset.id;
           const mode = tr.dataset.mode;
           if (mode === "view") {
+            tr.querySelector('[data-act="up"]').onclick = () => reorderNode(id, -1);
+            tr.querySelector('[data-act="down"]').onclick = () => reorderNode(id, 1);
             tr.querySelector('[data-act="edit"]').onclick = () => {
               state.editingNode = id;
               render();
@@ -1088,6 +1093,21 @@
             };
           }
         });
+      }
+
+      async function reorderNode(id, dir) {
+        const ids = state.nodes.map((n) => n.id);
+        const i = ids.indexOf(id);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= ids.length) return;
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        try {
+          await api("/admin/api/nodes/reorder", {
+            method: "POST",
+            body: JSON.stringify({ ids }),
+          });
+          await refreshAll();
+        } catch (e) { toast(e.message, "err"); }
       }
 
 

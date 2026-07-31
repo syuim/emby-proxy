@@ -3,6 +3,8 @@ export interface NodeRecord {
   name: string;
   public_url: string;
   created_at: string;
+  // 排序序号，故障转移按此顺序依次往下选择
+  sort_order: number;
 }
 
 export interface NodesKV {

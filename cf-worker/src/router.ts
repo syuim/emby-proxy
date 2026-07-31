@@ -289,25 +289,33 @@ async function chooseNode(
     return primary;
   }
 
-  // 当前节点不健康：从其他节点中随机挑一个健康的
-  const fallbacks = nodes
-    .filter((n) => n.id !== emby.node_id && health.nodes[n.id]?.healthy);
-  if (fallbacks.length > 0) {
-    const pick = fallbacks[Math.floor(Math.random() * fallbacks.length)]!;
+  // 当前节点不健康：按排序从当前节点位置依次往下找健康节点（到末尾回绕）。
+  // nodes 已由 readNodes 按 sort_order 排好序。
+  const startIdx = nodes.findIndex((n) => n.id === emby.node_id);
+  let pick: NodeRecord | null = null;
+  for (let i = 1; i <= nodes.length; i++) {
+    const candidate = nodes[(startIdx + i) % nodes.length]!;
+    if (candidate.id !== emby.node_id && health.nodes[candidate.id]?.healthy) {
+      pick = candidate;
+      break;
+    }
+  }
+  if (pick) {
     console.warn(
       `node '${emby.node_id}' unhealthy for emby='${emby.name}', failover to '${pick.id}' (home='${emby.home_node_id}')`,
     );
     // 持久化转移：该不健康节点关联的所有 emby 一并切到新节点，后续请求直达；
     // home_node_id 保持原始配置，探活确认原节点恢复后由 runHealthCycle 切回
     const unhealthyId = emby.node_id;
+    const pickId = pick.id;
     ctx.waitUntil(
       env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?")
-        .bind(pick.id, unhealthyId)
+        .bind(pickId, unhealthyId)
         .run()
         .then(
           (r) =>
             console.log(
-              `[failover] moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${pick.id}'`,
+              `[failover] moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${pickId}'`,
             ),
           (err) => console.error(`[failover] persist failed: ${err}`),
         ),

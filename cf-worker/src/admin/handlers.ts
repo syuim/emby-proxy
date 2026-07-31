@@ -48,12 +48,13 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionC
     name: trimmed.name,
     public_url: trimmed.public_url,
     created_at: new Date().toISOString(),
+    sort_order: nodes.nodes.reduce((m, n) => Math.max(m, n.sort_order), -1) + 1,
   };
   nodes.nodes.push(newNode);
   const stmts: D1PreparedStatement[] = [
     env.EMBY_DB.prepare(
-      "INSERT INTO nodes(id, name, public_url, created_at) VALUES(?,?,?,?)",
-    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.created_at),
+      "INSERT INTO nodes(id, name, public_url, created_at, sort_order) VALUES(?,?,?,?,?)",
+    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.created_at, newNode.sort_order),
   ];
   await env.EMBY_DB.batch(stmts);
   // 添加节点后立即探测，写入健康状态
@@ -111,6 +112,23 @@ export async function handleUpdateNode(
   ];
   await env.EMBY_DB.batch(stmts);
   return json(200, { ok: true, node });
+}
+
+export async function handleReorderNodes(req: JsonRequest, env: Env): Promise<Response> {
+  const { ids } = req.body ?? {};
+  if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => typeof x !== "string")) {
+    return json(400, { error: "ids（节点 id 数组）必填" });
+  }
+  const nodes = await readNodes(env);
+  const known = new Set(nodes.nodes.map((n) => n.id));
+  if (ids.length !== known.size || ids.some((x: string) => !known.has(x))) {
+    return json(400, { error: "ids 必须包含且仅包含全部节点" });
+  }
+  const stmts = ids.map((nodeId: string, i: number) =>
+    env.EMBY_DB.prepare("UPDATE nodes SET sort_order = ? WHERE id = ?").bind(i, nodeId),
+  );
+  await env.EMBY_DB.batch(stmts);
+  return json(200, { ok: true });
 }
 
 export async function handleDeleteNode(env: Env, id: string): Promise<Response> {
