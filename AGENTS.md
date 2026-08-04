@@ -50,7 +50,7 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 - **失败判定（请求驱动）**：router 选节点时对目标节点实时探测 `GET /__health`（3s 超时），isolate 内存缓存**非对称 TTL**（活 30s / 死 15s）。探测不通并行探测其余节点，按排序取第一个活的立即切换（全灭最坏 ~6s：主节点超时 3s + 并行探测 3s），**不依赖 cron 探活周期**。cron 探活仍负责 failback/救援判定与配置补推。
 - **转移（sticky）**：emby 的 `node_id` 探测不通 → router 按节点 `sort_order` 排序，从当前节点位置**依次往下**（到末尾回绕）挑第一个探测存活的，并把该故障节点关联的**所有 emby** 的 `node_id` 定向 UPDATE 为新节点（`home_node_id` 不动），后续请求直接命中新节点。转移可能连锁发生多次。节点排序在管理 UI 节点页用 ↑/↓ 调整（`POST /admin/api/nodes/reorder`）。
 - **兜底（也持久化）**：全部节点不健康 → 307 直连 emby 的 `backend_url`（不返 503），并把该不健康节点关联的所有 emby 的 `node_id` UPDATE 为 `''`（直连），后续请求不再逐个探健康；探活周期负责恢复：home 恢复 → 切回；home 未恢复但有其他健康节点 → 按排序转移过去。
-- **本地代理**：`node_id = 'local'` 是哨兵值（非真实节点），表示 Worker 本地代理——不 307，Worker 全程中转，客户端只见 Worker 域名。IP 透传固定 strict：抹 CF/代理头、Origin/Referer 对齐后端、透传 X-Real-IP/X-Forwarded-For。改写规则：后端 302 / PlaybackInfo（`DirectStreamUrl`/`TranscodingUrl`）/ M3U8 切片里的绝对 URL，**同源**改写为名称形式 `/emby/<name>/path`，**跨域**（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。仅显式配置可用，不参与故障转移/探活。
+- **本地代理**：`node_id = 'local'` 是哨兵值（非真实节点），表示 Worker 本地代理——不 307，Worker 全程中转，客户端只见 Worker 域名。**隐藏客户端真实 IP**：抹 CF/代理头、Origin/Referer 对齐后端，不注入 X-Real-IP/X-Forwarded-For，后端只见 CF 边缘出口 IP。改写规则：后端 302 / PlaybackInfo（`DirectStreamUrl`/`TranscodingUrl`）/ M3U8 切片里的绝对 URL，**同源**改写为名称形式 `/emby/<name>/path`，**跨域**（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。仅显式配置可用，不参与故障转移/探活。
 - **只有两种访问形式**：名称访问 `/emby/<name>/path` → 走节点选择（local 亦在其中）；地址访问 `/emby/http(s)://...`（原样或 URL 编码）→ **必走本地代理**。不存在 `/emby/<name>/<url>` 形式。**原样形式**（用户粘贴）会自动注册 emby，`node_id`/`home_node_id` 固定为 `local`（地址访问永远本地代理，节点上没有它的配置），因此**只写 emby 记录**——不 bump `version`、不 fan-out 推节点（否则 cron 会误判补推）；**编码形式**是本地代理改写的回流产物（多为 CDN 直链），不触发注册，避免刷表。URL 自带 query（CDN 签名）与外层 query 会合并。**无鉴权**，等同 open proxy，依赖域名不公开。
 - **恢复（failback，带冷却期）**：探活周期发现 `home_node_id` 节点**连续两个周期**健康（防 flapping 反复切）→ 把 `node_id != home_node_id` 的 emby 一次性切回 `home_node_id`。多次转移后仍恢复到**原始配置节点**，而非上一次的临时节点。
 - **误报防护**：故障转移持久化写库前，会对「不健康」节点实时复核探测一次（`persistIfConfirmedDead`）；节点实际活着（health 表过期/误报）则跳过写库，本次请求仍走转移目标，等 cron 自愈。
@@ -90,6 +90,7 @@ cf-worker → 节点 `POST /admin/sync` payload **完全沿用旧 schema**，向
 ## 部署
 
 - **CF Worker**：CF 已关联本 GitHub 仓库（Git 集成），线上 Worker 名为 **`emby-proxy`**（与 `wrangler.toml` 的 `name` 一致）——`cf-worker/**` 做完改动后 → 提交合并到 `main` 推送 GitHub，**CF 自动触发构建部署**，无需手动 `wrangler deploy`。直接说"部署"或"合并到 main"即可，不需要问。历史上曾有 GitHub Actions 部署链路（worker 名 `tg-toolbox-emby-router`），已移除，不要恢复。
+- **分支部署规则**：**只有合并到 `main`（或直接在 `main` 上提交）并推送远程才触发 CF 自动部署**；非 main 分支（如 `feat/*`）推送**不会**触发自动构建。分支上需要验证线上行为时：手动部署（`npx wrangler deploy`，注意会覆盖线上）或去 CF 面板 Workers → emby-proxy → Deployments 用 Git 集成部署该分支，验证通过后再合并 main 走自动部署。
 - **构建日志**：wrangler OAuth 无 Workers Builds 权限，CLI 查不了构建日志，失败原因去面板 Workers → emby-proxy → Deployments 看。CLI 只能用 `npx wrangler deployments list` 核对部署时间。
 - **D1 migration**：**CF 构建不跑 migration**，需本地执行（且要在推送部署前跑，避免新代码 SELECT 新列失败）：
   ```bash

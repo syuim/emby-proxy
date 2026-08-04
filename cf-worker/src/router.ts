@@ -77,7 +77,8 @@ export async function handleClientRequest(
 }
 
 // ---------- Worker 本地代理引擎 ----------
-// 全程 Worker 中转：客户端只看到 Worker 域名。IP 透传固定 strict 模式（防 403）。
+// 全程 Worker 中转：客户端只看到 Worker 域名。隐藏客户端真实 IP：不注入
+// X-Real-IP / X-Forwarded-For，后端只见 CF 边缘出口 IP。
 // 改写规则：同源（emby 后端自身）→ 名称形式 /emby/<name>/path；
 // 跨域（CDN 直链）→ 编码地址形式 /emby/<encodeURIComponent(url)>。
 
@@ -116,11 +117,7 @@ async function proxyLocal(
     });
   }
 
-  // strict：抹 CF/代理头 + 对齐 Origin/Referer + 透传真实 IP
-  const realIp =
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-real-ip") ||
-    (request.headers.get("x-forwarded-for") || "").split(",")[0]!.trim();
+  // 隐藏客户端真实 IP：抹 CF/代理头 + 对齐 Origin/Referer，不注入 IP 头
   const headers = new Headers(request.headers);
   for (const h of [
     "host",
@@ -137,10 +134,6 @@ async function proxyLocal(
   }
   headers.set("Origin", targetUrl.origin);
   headers.set("Referer", targetUrl.origin + "/");
-  if (realIp) {
-    headers.set("X-Real-IP", realIp);
-    headers.set("X-Forwarded-For", realIp);
-  }
 
   const isStatic =
     STATIC_ASSET_RE.test(targetUrl.pathname) || EMBY_IMAGE_PATH_RE.test(targetUrl.pathname);
