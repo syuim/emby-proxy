@@ -1,4 +1,4 @@
-// /img 通用图片/请求代理：GET ?url=... 或 POST {url, method, body, headers}
+// /img 通用图片代理：仅 GET ?url=...（固定 GET、不可自定义头/体，避免成为开放中继）
 // 无鉴权。UA 未指定时随机伪装浏览器；Referer 按外部规则表自动补齐（防盗链）。
 import { isPrivateHost } from "./router";
 import { IMAGE_CACHE_MAX_AGE } from "./constants";
@@ -23,7 +23,7 @@ function randomUA(): string {
 
 // 外部 Referer 规则文件：每行一个完整 URL（https://sspai.com），
 // 域名作 pattern、整行作 Referer。isolate 内存缓存 1 小时。
-const DEFAULT_REFERER_RULES_URL = "https://static.laoz.org/bot/proxy_prefer.txt";
+const DEFAULT_REFERER_RULES_URL = "https://static.laoz.org/proxy/proxy_prefer.txt";
 const RULES_CACHE_TTL_MS = 3600 * 1000;
 
 interface RefererRule {
@@ -32,8 +32,8 @@ interface RefererRule {
 }
 
 const BUILTIN_RULES: RefererRule[] = [
-  { pattern: /sspai\.com/, referer: "https://sspai.com" },
-  { pattern: /indienova\.com/, referer: "https://indienova.com" },
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*sspai\.com(?:\/|$)/, referer: "https://sspai.com" },
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*indienova\.com(?:\/|$)/, referer: "https://indienova.com" },
 ];
 
 let rulesCache: { rules: RefererRule[]; expiry: number } = { rules: [], expiry: 0 };
@@ -55,7 +55,7 @@ async function loadRefererRules(env: Env): Promise<RefererRule[]> {
       .flatMap((line): RefererRule[] => {
         try {
           const hostname = new URL(line).hostname.replace(/\./g, "\\.");
-          return [{ pattern: new RegExp(hostname), referer: line }];
+          return [{ pattern: new RegExp(`^https://(?:[a-z0-9-]+\\.)*${hostname}(?:/|$)`), referer: line }];
         } catch {
           return [];
         }

@@ -137,13 +137,40 @@ export async function writeEmbys(
 export async function writeHealth(
   env: Env,
   value: HealthKV,
-  _cachedPrev?: HealthKV,
+  cachedPrev?: HealthKV,
 ): Promise<void> {
-  const stmts = [env.EMBY_DB.prepare("DELETE FROM health")];
+  // 定向 upsert（node_id 主键），只写本周期探测到的节点；
+  // 没在本周期的节点（如刚删）由调用方负责清理，避免全表 DELETE + 重插。
+  const stmts: D1PreparedStatement[] = [];
   for (const [nodeId, h] of Object.entries(value.nodes)) {
+    // 与缓存值无变化则跳过，减少无谓写入
+    if (cachedPrev) {
+      const prev = cachedPrev.nodes[nodeId];
+      if (
+        prev &&
+        prev.healthy === h.healthy &&
+        prev.last_check === h.last_check &&
+        prev.consecutive_fails === h.consecutive_fails &&
+        prev.last_latency_ms === h.last_latency_ms &&
+        prev.applied_version === h.applied_version &&
+        prev.last_sync_error === h.last_sync_error &&
+        JSON.stringify(prev.backend_latencies ?? null) === JSON.stringify(h.backend_latencies ?? null)
+      ) {
+        continue;
+      }
+    }
     stmts.push(
       env.EMBY_DB.prepare(
-        "INSERT INTO health(node_id, healthy, last_check, consecutive_fails, last_latency_ms, applied_version, last_sync_error, backend_latencies) VALUES(?,?,?,?,?,?,?,?)",
+        `INSERT INTO health(node_id, healthy, last_check, consecutive_fails, last_latency_ms, applied_version, last_sync_error, backend_latencies)
+         VALUES(?,?,?,?,?,?,?,?)
+         ON CONFLICT(node_id) DO UPDATE SET
+           healthy = excluded.healthy,
+           last_check = excluded.last_check,
+           consecutive_fails = excluded.consecutive_fails,
+           last_latency_ms = excluded.last_latency_ms,
+           applied_version = excluded.applied_version,
+           last_sync_error = excluded.last_sync_error,
+           backend_latencies = excluded.backend_latencies`,
       ).bind(
         nodeId,
         h.healthy ? 1 : 0,
@@ -156,6 +183,7 @@ export async function writeHealth(
       ),
     );
   }
+  if (stmts.length === 0) return;
   await env.EMBY_DB.batch(stmts);
 }
 

@@ -83,15 +83,24 @@ export async function runHealthCycle(
     updated_at: new Date().toISOString(),
     nodes: {},
   };
+  const currentIds = new Set(nodesKV.nodes.map((n) => n.id));
   for (const o of outcomes) {
     const prev = prevHealth.nodes[o.node.id] ?? emptyNodeHealth();
     newHealth.nodes[o.node.id] = mergeHealth(prev, o);
   }
+  // 清理已删除节点的残留 health 行（定向 upsert 不再全表 DELETE）
+  const staleIds = Object.keys(prevHealth.nodes).filter((id) => !currentIds.has(id));
   await writeHealth(env, newHealth, prevHealth);
+  if (staleIds.length > 0) {
+    await env.EMBY_DB.prepare(
+      `DELETE FROM health WHERE node_id IN (${staleIds.map(() => "?").join(",")})`,
+    ).bind(...staleIds).run();
+  }
 
   // 恢复机制：home 连续两个周期健康（冷却期，防 flapping 反复切）→ 切回；
-  // 兜底直连的 emby 在 home 未恢复但有其他健康节点时，先转移到该节点
-  ctx.waitUntil(restoreRecoveredEmbys(env, embysKV, nodesKV, prevHealth, newHealth));
+  // 兜底直连的 emby 在 home 未恢复但有其他健康节点时，先转移到该节点。
+  // force=true（手动立即探测）时跳过冷却，只要有健康即切回。
+  ctx.waitUntil(restoreRecoveredEmbys(env, embysKV, nodesKV, prevHealth, newHealth, force));
 
   // 补齐：节点 applied_version 与 KV embys.version 不一致（或未知）时异步补推
   ctx.waitUntil(
@@ -111,13 +120,15 @@ async function restoreRecoveredEmbys(
   nodesKV: NodesKV,
   prevHealth: HealthKV,
   health: HealthKV,
+  force = false,
 ): Promise<void> {
   const stmts: D1PreparedStatement[] = [];
   const logs: string[] = [];
 
-  // 冷却期：本周期 + 上一周期都健康才算「稳定恢复」
+  // 冷却期：本周期 + 上一周期都健康才算「稳定恢复」；force=true（手动探测）跳过冷却
   const stablyHealthy = (id: string) =>
-    health.nodes[id]?.healthy === true && prevHealth.nodes[id]?.healthy === true;
+    force ||
+    (health.nodes[id]?.healthy === true && prevHealth.nodes[id]?.healthy === true);
 
   const recoveredHomeIds = new Set(
     embysKV.embys

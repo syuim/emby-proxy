@@ -83,9 +83,13 @@ export async function handleClientRequest(
 // 跨域（CDN 直链）→ 编码地址形式 /emby/<encodeURIComponent(url)>。
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+// 图片/字幕类可长缓存；前端资源（js/css 等）随版本更新，短缓存避免客户端拿到过期代码
 const STATIC_ASSET_RE =
-  /\.(jpg|jpeg|gif|png|svg|ico|webp|js|css|woff2?|ttf|otf|map|webmanifest|srt|ass|vtt|sub)$/i;
+  /\.(jpg|jpeg|gif|png|svg|ico|webp|srt|ass|vtt|sub)$/i;
+const FRONTEND_ASSET_RE =
+  /\.(js|css|woff2?|ttf|otf|map|webmanifest)$/i;
 const EMBY_IMAGE_PATH_RE = /(\/Images\/|\/Icons\/|\/Branding\/|\/emby\/covers\/)/i;
+const FRONTEND_ASSET_MAX_AGE = 60 * 60; // 1h
 
 async function proxyLocal(
   request: Request,
@@ -137,6 +141,8 @@ async function proxyLocal(
 
   const isStatic =
     STATIC_ASSET_RE.test(targetUrl.pathname) || EMBY_IMAGE_PATH_RE.test(targetUrl.pathname);
+  const isFrontend =
+    FRONTEND_ASSET_RE.test(targetUrl.pathname);
 
   const init: RequestInit & { cf?: { cacheEverything: boolean; cacheTtl: number } } = {
     method: request.method,
@@ -146,6 +152,8 @@ async function proxyLocal(
   };
   if (isStatic) {
     init.cf = { cacheEverything: true, cacheTtl: 86400 };
+  } else if (isFrontend) {
+    init.cf = { cacheEverything: true, cacheTtl: FRONTEND_ASSET_MAX_AGE };
   }
 
   const resp = await fetch(targetUrl.toString(), init);
@@ -245,6 +253,10 @@ async function proxyLocal(
     respHeaders.set("Cache-Control", "public, max-age=86400");
     respHeaders.delete("Expires");
     respHeaders.delete("Pragma");
+  } else if (isFrontend) {
+    respHeaders.set("Cache-Control", `public, max-age=${FRONTEND_ASSET_MAX_AGE}`);
+    respHeaders.delete("Expires");
+    respHeaders.delete("Pragma");
   } else {
     respHeaders.set("Cache-Control", "no-store");
   }
@@ -322,28 +334,23 @@ export async function handleDirectRequest(
   let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
   // 只在原样形式（用户粘贴入口）时自动注册；编码形式是改写回流（多为 CDN），不注册避免刷表
   if (!emby && rawForm) {
-    const name = await generateDirectEmbyName(backendOrigin);
-    if (embysKV.embys.some((e) => e.name === name)) {
-      const fresh = await readEmbys(env);
-      emby = fresh.embys.find((e) => e.backend_url === backendOrigin);
-      if (!emby) {
-        return new Response("Internal Server Error: name collision", { status: 500 });
+    // 撞名极低概率，重试几次生成不同名字，避免直接 500
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const name = await generateDirectEmbyName(backendOrigin, attempt);
+      if (!embysKV.embys.some((e) => e.name === name)) {
+        embysKV.embys.push({
+          name,
+          backend_url: backendOrigin,
+          node_id: LOCAL_NODE_ID,
+          home_node_id: LOCAL_NODE_ID,
+          created_at: new Date().toISOString(),
+        });
+        await writeEmbys(env, embysKV);
+        emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
+        break;
       }
     }
-
-    if (!emby) {
-      // 地址访问永远本地代理，节点上没有它的配置 → node_id 固定 local。
-      // 节点配置未变，故不 bump version、不 fan-out（否则 cron 会误判补推）。
-      emby = {
-        name,
-        backend_url: backendOrigin,
-        node_id: LOCAL_NODE_ID,
-        home_node_id: LOCAL_NODE_ID,
-        created_at: new Date().toISOString(),
-      };
-      embysKV.embys.push(emby);
-      await writeEmbys(env, embysKV);
-    }
+    // 3 次都撞名（理论不可能）→ 仍按未注册处理，改写走编码地址形式
   }
 
   // 地址访问必走本地代理。未注册的源（CDN 回流）：无名称前缀，改写全部用编码地址形式
@@ -351,12 +358,13 @@ export async function handleDirectRequest(
   return proxyLocal(request, target, emby?.name ?? "", emby ? emby.backend_url : "");
 }
 
-async function generateDirectEmbyName(backendUrl: string): Promise<string> {
+async function generateDirectEmbyName(backendUrl: string, attempt = 0): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(backendUrl));
   const hex = Array.from(new Uint8Array(hash, 0, 8))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  return "d_" + hex;
+  // 撞名时加后缀重试（d_<hash> 或 d_<hash>-1/-2），仍在 32 字符上限内
+  return attempt === 0 ? "d_" + hex : `d_${hex}-${attempt}`;
 }
 
 // ponytail: simple IP check for SSRF at cf-worker level. Hostname-based SSRF is caught by proxy-go's isDangerousRedirect.

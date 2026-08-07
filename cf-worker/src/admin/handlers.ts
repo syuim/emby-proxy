@@ -111,7 +111,10 @@ export async function handleUpdateNode(
     ).bind(node.name, node.public_url, id),
   ];
   await env.EMBY_DB.batch(stmts);
-  return json(200, { ok: true, node });
+  // 节点 URL 变更不影响 emby 配置（节点上仍是同一份 snapshot），
+  // 但探活/推送会指向新地址，故推一次让各节点版本对齐、触发 cron 用新 URL 探测。
+  const push = await fanoutPush(env, await readEmbys(env), nodes, "update-node");
+  return json(200, { ok: true, node, push_results: push });
 }
 
 export async function handleReorderNodes(req: JsonRequest, env: Env): Promise<Response> {
@@ -136,7 +139,9 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
   const target = nodes.nodes.find((n) => n.id === id);
   if (!target) return json(404, { error: "节点不存在" });
 
-  const otherNodes = nodes.nodes.filter((n) => n.id !== id);
+  const otherNodes = nodes.nodes
+    .filter((n) => n.id !== id)
+    .sort((a, b) => a.sort_order - b.sort_order);
   const fallbackNode = otherNodes[0] ?? null;
 
   const refs = embys.embys.filter(
