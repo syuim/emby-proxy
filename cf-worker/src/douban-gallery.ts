@@ -30,22 +30,40 @@ body {
 }
 .cat-name { font-size: 17px; font-weight: 600; color: #fff; }
 .cat-count { font-size: 12px; color: #666; margin-left: 4px; }
+
+/* Arrow button */
 .expand-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: 50%;
-  background: #2a2a4a; color: #888; cursor: pointer; border: none;
-  font-size: 16px; transition: all .2s; flex-shrink: 0;
-  margin-left: auto;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: linear-gradient(135deg, #2a2a4a, #3a3a5a);
+  color: #aaa; cursor: pointer; border: 1px solid #4a4a6a;
+  font-size: 14px; transition: all .25s; flex-shrink: 0;
+  margin-left: auto; position: relative; overflow: hidden;
 }
-.expand-btn:hover { background: #3a3a5a; color: #fff; }
-.expand-btn.expanded { transform: rotate(90deg); background: #4a4a6a; color: #fff; }
+.expand-btn::before {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: linear-gradient(135deg, #6c5ce7, #a855f7); opacity: 0;
+  transition: opacity .25s;
+}
+.expand-btn:hover { border-color: #6c5ce7; color: #fff; }
+.expand-btn:hover::before { opacity: .3; }
+.expand-btn svg { position: relative; z-index: 1; transition: transform .3s; }
+.expand-btn.expanded { border-color: #6c5ce7; background: linear-gradient(135deg, #3a2a5a, #4a3a6a); }
+.expand-btn.expanded svg { transform: rotate(90deg); }
+
+/* Scroll container - hide scrollbar by default */
 .scroll-wrap {
   overflow-x: auto; overflow-y: hidden;
   scroll-behavior: smooth; padding-bottom: 8px;
+  -ms-overflow-style: none; scrollbar-width: none;
 }
-.scroll-wrap::-webkit-scrollbar { height: 6px; }
-.scroll-wrap::-webkit-scrollbar-track { background: transparent; }
-.scroll-wrap::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+.scroll-wrap::-webkit-scrollbar { display: none; }
+.scroll-wrap:hover { -ms-overflow-style: auto; scrollbar-width: thin; }
+.scroll-wrap:hover::-webkit-scrollbar { display: block; height: 6px; }
+.scroll-wrap:hover::-webkit-scrollbar-track { background: transparent; }
+.scroll-wrap:hover::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+.scroll-wrap:hover::-webkit-scrollbar-thumb:hover { background: #555; }
+
 .poster-row {
   display: flex; gap: 12px; min-width: min-content; padding: 4px 0;
 }
@@ -55,10 +73,22 @@ body {
   background: #1a1a2e;
 }
 .poster-card:hover { transform: translateY(-3px); }
-.poster-card img {
-  width: 140px; height: 200px; object-fit: cover;
-  display: block; background: #222;
+.poster-img-wrap {
+  width: 140px; height: 200px; position: relative; overflow: hidden;
+  background: #1a1a2e;
 }
+/* Skeleton placeholder shimmer */
+.skeleton {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, #1a1a2e 25%, #2a2a3e 50%, #1a1a2e 75%);
+  background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite;
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.poster-img-wrap img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  opacity: 0; transition: opacity .3s;
+}
+.poster-img-wrap img.loaded { opacity: 1; }
 .poster-card .title {
   padding: 6px 8px; font-size: 12px; color: #bbb;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -72,7 +102,7 @@ body {
 }
 .expanded-grid.open { display: grid; }
 .expanded-grid .poster-card { width: 140px; }
-.expanded-grid .poster-card img { width: 140px; height: 200px; }
+.expanded-grid .poster-img-wrap { width: 140px; height: 200px; }
 .load-more {
   display: none; text-align: center; padding: 12px;
 }
@@ -84,9 +114,12 @@ body {
 @media (max-width: 600px) {
   .header { padding: 14px 16px; }
   #app { padding: 12px 12px; }
-  .poster-card, .poster-card img { width: 110px; }
-  .poster-card img { height: 160px; }
+  .poster-card, .poster-card .poster-img-wrap,
+  .poster-card .poster-img-wrap img { width: 110px; }
+  .poster-img-wrap { height: 160px; }
   .expanded-grid { grid-template-columns: repeat(auto-fill, 110px); }
+  .expanded-grid .poster-card { width: 110px; }
+  .expanded-grid .poster-img-wrap { width: 110px; height: 160px; }
 }
 </style>
 </head>
@@ -97,6 +130,9 @@ body {
 </div>
 <div id="app"><div class="loading">加载中...</div></div>
 <script>
+// Arrow SVG icon
+const ARROW_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>';
+
 (async () => {
   const app = document.getElementById('app');
   const P = '/douban';
@@ -116,17 +152,66 @@ body {
     return item.poster || item.background || '';
   }
 
+  // IntersectionObserver - load image lazily
+  const imgObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const wrap = entry.target;
+      const img = wrap.querySelector('img');
+      const skeleton = wrap.querySelector('.skeleton');
+      if (img && img.dataset.src) {
+        img.src = img.dataset.src;
+        delete img.dataset.src;
+      }
+      if (skeleton) skeleton.style.animationPlayState = 'paused';
+      imgObserver.unobserve(wrap);
+    }
+  }, { rootMargin: '200px' });
+
   function createCard(item) {
-    const img = posterUrl(item);
+    const imgUrl = posterUrl(item);
     const card = document.createElement('div');
     card.className = 'poster-card';
-    card.innerHTML = \`
-      <img src="\${img}" alt="\${item.name}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22140%22 height=%22200%22><rect fill=%22%23222%22 width=%22140%22 height=%22200%22/><text x=%2250%%22 y=%2250%%22 text-anchor=%22middle%22 fill=%22%23555%22 font-size=%2212%22>无图</text></svg>'">
-      <div class="title">\${item.name}</div>
-      <div class="rating">\${ratingStr(item.links)}</div>
-    \`;
+
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'poster-img-wrap';
+
+    const skeleton = document.createElement('div');
+    skeleton.className = 'skeleton';
+    imgWrap.appendChild(skeleton);
+
+    const img = document.createElement('img');
+    img.alt = item.name;
+    if (imgUrl) {
+      img.dataset.src = imgUrl;
+      imgObserver.observe(imgWrap);
+    } else {
+      img.src = '';
+    }
+    img.onload = () => {
+      img.classList.add('loaded');
+      skeleton.remove();
+    };
+    img.onerror = function () {
+      skeleton.remove();
+      img.style.display = 'none';
+    };
+    imgWrap.appendChild(img);
+
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = item.name;
+
+    const rating = document.createElement('div');
+    rating.className = 'rating';
+    rating.textContent = ratingStr(item.links);
+
+    card.appendChild(imgWrap);
+    card.appendChild(title);
+    card.appendChild(rating);
+
     const link = (item.id || '').startsWith('tmdb:')
-      ? \`https://www.themoviedb.org/\${(item.type==='series'?'tv':'movie')}/\${item.id.split(':').pop()}\`
+      ? \`https://www.themoviedb.org/\${(item.type === 'series' ? 'tv' : 'movie')}/\${item.id.split(':').pop()}\`
       : (item.links && item.links[0] && item.links[0].url !== '#' ? item.links[0].url : null);
     if (link) { card.style.cursor = 'pointer'; card.onclick = () => window.open(link, '_blank'); }
     return card;
@@ -144,6 +229,7 @@ body {
       const total = (allItems[cat.id] || []).length;
       let expanded = false;
       let pageItems = (allItems[cat.id] || []).slice();
+      let moreSkip = 20;
 
       const header = document.createElement('div');
       header.className = 'cat-header';
@@ -151,7 +237,7 @@ body {
 
       const expandBtn = document.createElement('button');
       expandBtn.className = 'expand-btn';
-      expandBtn.textContent = '→';
+      expandBtn.innerHTML = ARROW_SVG;
       expandBtn.title = '展开全部';
       header.appendChild(expandBtn);
 
@@ -172,27 +258,26 @@ body {
       loadBtn.textContent = '加载更多';
       loadMore.appendChild(loadBtn);
 
-      let skip = 20;
       loadBtn.onclick = async () => {
         loadBtn.textContent = '加载中...';
         loadBtn.disabled = true;
         try {
-          const data = await fetchJSON(\`\${P}/\${cat.configId || CONFIG_ID}/catalog/\${cat.type}/\${cat.id}.json?skip=\${skip}\`);
+          const data = await fetchJSON(\`\${P}/\${cat.configId || CONFIG_ID}/catalog/\${cat.type}/\${cat.id}.json?skip=\${moreSkip}\`);
           const newItems = data.metas || [];
           if (newItems.length === 0) { loadMore.style.display = 'none'; return; }
           newItems.forEach(item => {
             pageItems.push(item);
             expandedGrid.appendChild(createCard(item));
           });
-          skip += newItems.length;
+          moreSkip += newItems.length;
           if (newItems.length < 20) loadMore.style.display = 'none';
           else { loadBtn.textContent = '加载更多'; loadBtn.disabled = false; }
-        } catch(e) {
+        } catch (e) {
           loadBtn.textContent = '加载失败';
         }
       };
 
-      expandBtn.onclick = async () => {
+      expandBtn.onclick = () => {
         expanded = !expanded;
         expandBtn.classList.toggle('expanded');
         if (expanded) {
@@ -229,7 +314,7 @@ body {
         const url = \`\${P}/\${CONFIG_ID}/catalog/\${cat.type}/\${cat.id}.json?skip=0\`;
         const data = await fetchJSON(url);
         allItems[cat.id] = data.metas || [];
-      } catch(e) {
+      } catch (e) {
         errors.push(\`\${cat.name}: \${e.message}\`);
         allItems[cat.id] = [];
       }
@@ -243,7 +328,7 @@ body {
     }
 
     renderCats(catalogs, allItems);
-  } catch(e) {
+  } catch (e) {
     app.innerHTML = \`<div class="error">加载失败: \${e.message}</div>\`;
   }
 })();
