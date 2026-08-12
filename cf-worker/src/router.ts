@@ -424,8 +424,9 @@ export async function handleDoubanRequest(request: Request): Promise<Response> {
   }
 
   // 文本响应改写：JSON（图片 URL / manifestUrl 绝对地址）、HTML（root-relative
-  // 链接）、JS（fetch 路径）都要加 /douban 前缀，否则浏览器脱离前缀 404
-  if (resp.status === 200) {
+  // 链接）、JS（fetch 路径）都要加 /douban 前缀，否则浏览器脱离前缀 404。
+  // 200 与 401（登录失败重渲染登录页）都改写。
+  if (resp.status === 200 || resp.status === 401) {
     const ct = (respHeaders.get("content-type") || "").toLowerCase();
     if (ct.includes("json") || ct.includes("html") || ct.includes("javascript")) {
       try {
