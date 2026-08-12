@@ -29,10 +29,10 @@ export const DOUBAN_FW_ORIGIN = "https://fw-douban.laoz.org";
 // profile 是 /suyu，307 跳转必须带此前缀才命中用户配置的图源/行为）
 export const DOUBAN_FW_PROFILE_PATH = "/suyu";
 export const DOUBAN_FW_PROBE_PATH = DOUBAN_FW_PROFILE_PATH + "/manifest.json";
-// fw 探活指数退避缓存：成功 15s；失败 5m → 10m → 30m → 1h → 2h → 4h → 8h
-// → 16h → 24h（封顶），恢复后重新从 15s 开始
-// 成功能级：15s
-export const DOUBAN_FW_OK_TTL_MS = 15_000;
+// fw 探活指数退避缓存：成功 60s；失败 5m → 10m → 30m → 1h → 2h → 4h → 8h
+// → 16h → 24h（封顶），恢复后重新从 60s 开始
+// 成功能级：60s
+export const DOUBAN_FW_OK_TTL_MS = 60_000;
 // 失败初始退避
 export const DOUBAN_FW_FAIL_TTL_BASE_MS = 5 * 60 * 1000;
 export const DOUBAN_FW_FAIL_TTL_MAX_MS = 24 * 60 * 60 * 1000;

@@ -325,13 +325,13 @@ describe("isDoubanCacheablePath", () => {
 });
 
 describe("doubanFwTtlMs", () => {
-  it("alive is fixed 15s", () => {
-    expect(doubanFwTtlMs(true, 0)).toBe(15_000);
-    expect(doubanFwTtlMs(true, 10)).toBe(15_000);
+  it("alive is fixed 60s", () => {
+    expect(doubanFwTtlMs(true, 0)).toBe(60_000);
+    expect(doubanFwTtlMs(true, 10)).toBe(60_000);
   });
 
   it("fail backoff doubles and caps at 24h", () => {
-    expect(doubanFwTtlMs(false, 0)).toBe(15_000);
+    expect(doubanFwTtlMs(false, 0)).toBe(60_000);
     expect(doubanFwTtlMs(false, 1)).toBe(5 * 60_000);
     expect(doubanFwTtlMs(false, 2)).toBe(10 * 60_000);
     expect(doubanFwTtlMs(false, 3)).toBe(30 * 60_000);
