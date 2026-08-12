@@ -5,6 +5,9 @@ import {
   isCacheableImageRequest,
   buildTargetUrl,
   buildImageCacheKey,
+  isDoubanCacheablePath,
+  rewriteDoubanLocation,
+  rewriteDoubanBody,
 } from "./router";
 
 describe("isPrivateHost", () => {
@@ -132,5 +135,87 @@ describe("buildImageCacheKey", () => {
   it("uses GET method", () => {
     const req = buildImageCacheKey("http://node:8080/emby/Images/Primary");
     expect(req.method).toBe("GET");
+  });
+});
+
+describe("rewriteDoubanLocation", () => {
+  const base = "https://fw-douban.laoz.org/";
+
+  it("prefixes relative locations", () => {
+    expect(rewriteDoubanLocation("/configure", base)).toBe("/douban/configure");
+    expect(rewriteDoubanLocation("/login", base)).toBe("/douban/login");
+  });
+
+  it("rewrites absolute locations on the douban origin", () => {
+    expect(rewriteDoubanLocation("https://fw-douban.laoz.org/login?next=x", base)).toBe(
+      "/douban/login?next=x",
+    );
+  });
+
+  it("keeps external links untouched", () => {
+    expect(rewriteDoubanLocation("https://www.douban.com/", base)).toBe(
+      "https://www.douban.com/",
+    );
+    expect(rewriteDoubanLocation("https://www.themoviedb.org/movie/1", base)).toBe(
+      "https://www.themoviedb.org/movie/1",
+    );
+  });
+
+  it("preserves query", () => {
+    expect(rewriteDoubanLocation("/configure?tab=1", base)).toBe("/douban/configure?tab=1");
+  });
+
+  it("returns null for missing location", () => {
+    expect(rewriteDoubanLocation(null, base)).toBeNull();
+  });
+});
+
+describe("rewriteDoubanBody", () => {
+  const worker = "https://proxy.laoz.org";
+
+  it("rewrites worker-origin image-proxy urls", () => {
+    const body = `{"poster":"https://proxy.laoz.org/image-proxy?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`;
+    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(
+      `{"poster":"https://proxy.laoz.org/douban/image-proxy?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`,
+    );
+  });
+
+  it("rewrites douban-origin image-proxy urls (openresty stripped X-Forwarded-Host)", () => {
+    const body = `{"poster":"https://fw-douban.laoz.org/image-proxy?url=x"}`;
+    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(
+      `{"poster":"https://proxy.laoz.org/douban/image-proxy?url=x"}`,
+    );
+  });
+
+  it("leaves encoded query strings untouched", () => {
+    const body = `{"url":"https://proxy.laoz.org/image-proxy?url=https%3A%2F%2Fexample.com%2Fa%2Fimage-proxy%2Fb.jpg"}`;
+    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(
+      `{"url":"https://proxy.laoz.org/douban/image-proxy?url=https%3A%2F%2Fexample.com%2Fa%2Fimage-proxy%2Fb.jpg"}`,
+    );
+  });
+
+  it("is a no-op without matches", () => {
+    const body = `{"id":"douban:1","links":[{"url":"https://www.douban.com/"}]}`;
+    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(body);
+  });
+});
+
+describe("isDoubanCacheablePath", () => {
+  it.each([
+    ["/image-proxy?url=x", true],
+    ["/image-proxy", true],
+    ["/assets/index-abc123.js", true],
+  ])("caches %s", (path, expected) => {
+    expect(isDoubanCacheablePath(path)).toBe(expected);
+  });
+
+  it.each([
+    ["/catalog/movie/top250.json", false],
+    ["/manifest.json", false],
+    ["/meta/movie/douban:1.json", false],
+    ["/configure", false],
+    ["/login", false],
+  ])("does not cache %s", (path, expected) => {
+    expect(isDoubanCacheablePath(path)).toBe(expected);
   });
 });

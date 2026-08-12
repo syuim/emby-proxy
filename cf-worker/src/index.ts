@@ -1,8 +1,8 @@
 import { routeAdmin } from "./admin";
-import { EMBY_BASE_PATH, IMG_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, IMG_BASE_PATH, DOUBAN_BASE_PATH } from "./constants";
 import { runHealthCycle } from "./health";
 import { handleImgRequest } from "./imgproxy";
-import { handleClientRequest, handleDirectRequest, handleTmdbRequest } from "./router";
+import { handleClientRequest, handleDirectRequest, handleDoubanRequest, handleTmdbRequest } from "./router";
 import type { Env } from "./types";
 
 export default {
@@ -40,6 +40,11 @@ export default {
     // 一级命名空间 /img：通用图片代理
     if (url.pathname === IMG_BASE_PATH || url.pathname.startsWith(IMG_BASE_PATH + "/")) {
       return handleImgRequest(request, env);
+    }
+
+    // 一级命名空间 /douban：豆瓣 addon 反代
+    if (url.pathname === DOUBAN_BASE_PATH || url.pathname.startsWith(DOUBAN_BASE_PATH + "/")) {
+      return handleDoubanRequest(request);
     }
 
     return new Response("Not Found", {

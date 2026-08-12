@@ -17,6 +17,10 @@ export const EMBY_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 export const EMBY_BASE_PATH = "/emby";
 // 一级功能命名空间：通用图片代理 /img?url=...
 export const IMG_BASE_PATH = "/img";
+// 一级功能命名空间：豆瓣 addon 反代 /douban/...
+export const DOUBAN_BASE_PATH = "/douban";
+// 豆瓣 addon 原始后端（VPS 直连；fw-douban.laoz.org 是 nginx 前置，不依赖它）
+export const DOUBAN_ORIGIN = "http://rn.127315.xyz:31001";
 
 // emby.node_id 哨兵值：Worker 本地代理（不 307，Worker 直接 fetch 后端回传）
 export const LOCAL_NODE_ID = "local";

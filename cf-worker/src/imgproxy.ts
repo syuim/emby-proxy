@@ -21,7 +21,8 @@ function randomUA(): string {
   return UA_LIST[Math.floor(Math.random() * UA_LIST.length)]!;
 }
 
-// 外部 Referer 规则文件：每行一个完整 URL（https://sspai.com），
+// 外部 Referer 规则文件（默认 https://static.laoz.org/proxy/proxy_prefer.txt，
+// 可用环境变量 REFERER_RULES_URL 覆盖）：每行一个完整 URL（https://sspai.com），
 // 域名作 pattern、整行作 Referer。isolate 内存缓存 1 小时。
 const DEFAULT_REFERER_RULES_URL = "https://static.laoz.org/proxy/proxy_prefer.txt";
 const RULES_CACHE_TTL_MS = 3600 * 1000;

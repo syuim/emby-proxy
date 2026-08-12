@@ -1,4 +1,4 @@
-import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS } from "./constants";
+import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_ORIGIN } from "./constants";
 import { readEmbys, readNodes, writeEmbys } from "./storage";
 import { immediateProbe } from "./health";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
@@ -287,6 +287,143 @@ export async function handleTmdbRequest(request: Request): Promise<Response> {
     method: request.method,
     headers,
     body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+  });
+}
+
+// ---------- Douban 反向代理（Worker 直接转发，不走节点） ----------
+// 反代 Stremio 豆瓣 addon（DOUBAN_ORIGIN，见 constants.ts）。UA 透传以保留
+// forward 行为；注入 X-Forwarded-Host/Proto 让 addon 生成的图片 URL 指向
+// Worker（闭环到 /douban/image-proxy）；响应 JSON 中的图片 URL 做前缀改写兜底。
+
+// catalog 等 JSON 不强制缓存（cacheEverything）：UA 不进 CF cache key，
+// forward UA 的 tmdb: ID 响应会污染普通 UA 的缓存。仅图片与前端静态资源可缓存。
+const DOUBAN_FORWARD_HEADERS = [
+  "user-agent",
+  "accept",
+  "accept-language",
+  "content-type",
+  "cookie",
+  "authorization",
+  "referer",
+  "if-none-match",
+  "if-modified-since",
+];
+
+export function isDoubanCacheablePath(pathname: string): boolean {
+  return pathname.startsWith("/image-proxy") || pathname.startsWith("/assets/");
+}
+
+export function rewriteDoubanLocation(loc: string | null, baseUrl: string): string | null {
+  if (!loc) return null;
+  try {
+    const u = new URL(loc, baseUrl);
+    if (u.origin === new URL(baseUrl).origin) {
+      return DOUBAN_BASE_PATH + u.pathname + u.search;
+    }
+  } catch {
+    // Location 解析失败：原样透传
+  }
+  return loc;
+}
+
+export function rewriteDoubanBody(text: string, workerOrigin: string, doubanOrigin: string): string {
+  const suffix = "/image-proxy";
+  const target = workerOrigin + DOUBAN_BASE_PATH + suffix;
+  let out = text;
+  for (const origin of [workerOrigin, doubanOrigin]) {
+    out = out.split(origin + suffix).join(target);
+  }
+  return out;
+}
+
+export async function handleDoubanRequest(request: Request): Promise<Response> {
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
+
+  const url = new URL(request.url);
+  const subpath = url.pathname.slice(DOUBAN_BASE_PATH.length) || "/";
+  const target = DOUBAN_ORIGIN + subpath + url.search;
+
+  // 白名单重建请求头：天然剔除 host / cf-* / x-forwarded-* / x-real-ip
+  const headers = new Headers();
+  for (const k of DOUBAN_FORWARD_HEADERS) {
+    const v = request.headers.get(k);
+    if (v) headers.set(k, v);
+  }
+  // 覆盖注入：addon 的 getOrigin 据此生成指向 Worker 的图片 URL
+  headers.set("X-Forwarded-Host", url.host);
+  headers.set("X-Forwarded-Proto", url.protocol.slice(0, -1));
+  headers.set("Origin", DOUBAN_ORIGIN);
+  headers.set("Referer", DOUBAN_ORIGIN + "/");
+
+  const cacheable = isDoubanCacheablePath(subpath);
+  const init: RequestInit & {
+    cf?: { cacheEverything: boolean; cacheTtlByStatus: Record<string, number> };
+  } = {
+    method: request.method,
+    headers,
+    redirect: "manual",
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+  };
+  if (cacheable) {
+    // cacheTtlByStatus 只缓存 2xx，避免把 404/错误页缓存住
+    init.cf = {
+      cacheEverything: true,
+      cacheTtlByStatus: { "200-299": 86400, "300-599": 0 },
+    };
+  }
+
+  const resp = await fetch(target, init);
+  const respHeaders = new Headers(resp.headers);
+  respHeaders.set("Access-Control-Allow-Origin", "*");
+
+  // 30x：Location 改写回 /douban，客户端不脱离代理
+  if (REDIRECT_STATUSES.has(resp.status)) {
+    const loc = respHeaders.get("Location");
+    const rewritten = rewriteDoubanLocation(loc, target);
+    if (rewritten) respHeaders.set("Location", rewritten);
+  }
+
+  // catalog/meta JSON 重写：图片 URL 前缀 image-proxy → /douban/image-proxy
+  if (
+    resp.status === 200 &&
+    (respHeaders.get("content-type") || "").includes("json")
+  ) {
+    try {
+      const text = await resp.clone().text();
+      const rewritten = rewriteDoubanBody(text, url.origin, DOUBAN_ORIGIN);
+      if (rewritten !== text) {
+        respHeaders.delete("Content-Length");
+        return new Response(rewritten, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: respHeaders,
+        });
+      }
+    } catch (e) {
+      console.log("Douban body rewrite failed:", (e as Error).message);
+    }
+  }
+
+  if (cacheable) {
+    respHeaders.set("Cache-Control", "public, max-age=86400");
+    respHeaders.delete("Expires");
+    respHeaders.delete("Pragma");
+  }
+
+  return new Response(resp.body, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: respHeaders,
   });
 }
 
