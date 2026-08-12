@@ -51,18 +51,13 @@ body {
 .expand-btn.expanded { border-color: #6c5ce7; background: linear-gradient(135deg, #3a2a5a, #4a3a6a); }
 .expand-btn.expanded svg { transform: rotate(90deg); }
 
-/* Scroll container - hide scrollbar by default */
+/* Scroll container - hide scrollbar entirely */
 .scroll-wrap {
   overflow-x: auto; overflow-y: hidden;
   scroll-behavior: smooth; padding-bottom: 8px;
   -ms-overflow-style: none; scrollbar-width: none;
 }
 .scroll-wrap::-webkit-scrollbar { display: none; }
-.scroll-wrap:hover { -ms-overflow-style: auto; scrollbar-width: thin; }
-.scroll-wrap:hover::-webkit-scrollbar { display: block; height: 6px; }
-.scroll-wrap:hover::-webkit-scrollbar-track { background: transparent; }
-.scroll-wrap:hover::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-.scroll-wrap:hover::-webkit-scrollbar-thumb:hover { background: #555; }
 
 .poster-row {
   display: flex; gap: 12px; min-width: min-content; padding: 4px 0;
