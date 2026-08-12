@@ -21,6 +21,18 @@ export const IMG_BASE_PATH = "/img";
 export const DOUBAN_BASE_PATH = "/douban";
 // 豆瓣 addon 原始后端（VPS 直连；fw-douban.laoz.org 是 nginx 前置，不依赖它）
 export const DOUBAN_ORIGIN = "http://rn.127315.xyz:31001";
+// 豆瓣 addon 默认 profile（fw 前置域名 + 默认 profile 路径）。fw 可达时
+// /douban/* 直接 307 到 fw 域名（去掉 /douban 前缀），免 Worker 中转；
+// 不可达时回退 DOUBAN_ORIGIN 反代。
+export const DOUBAN_FW_ORIGIN = "https://fw-douban.laoz.org";
+export const DOUBAN_FW_PROBE_PATH = "/suyu/manifest.json";
+// fw 探活指数退避缓存：成功 15s；失败 5m → 10m → 30m → 1h → 2h → 4h → 8h
+// → 16h → 24h（封顶），恢复后重新从 15s 开始
+// 成功能级：15s
+export const DOUBAN_FW_OK_TTL_MS = 15_000;
+// 失败初始退避
+export const DOUBAN_FW_FAIL_TTL_BASE_MS = 5 * 60 * 1000;
+export const DOUBAN_FW_FAIL_TTL_MAX_MS = 24 * 60 * 60 * 1000;
 
 // emby.node_id 哨兵值：Worker 本地代理（不 307，Worker 直接 fetch 后端回传）
 export const LOCAL_NODE_ID = "local";

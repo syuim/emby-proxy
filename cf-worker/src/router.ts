@@ -1,4 +1,4 @@
-import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_ORIGIN } from "./constants";
+import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_FW_ORIGIN, DOUBAN_FW_PROBE_PATH, DOUBAN_FW_OK_TTL_MS, DOUBAN_FW_FAIL_TTL_BASE_MS, DOUBAN_FW_FAIL_TTL_MAX_MS } from "./constants";
 import { readEmbys, readNodes, writeEmbys } from "./storage";
 import { immediateProbe } from "./health";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
@@ -315,6 +315,79 @@ export function isDoubanCacheablePath(pathname: string): boolean {
   return pathname.startsWith("/image-proxy") || pathname.startsWith("/assets/");
 }
 
+// fw-douban.laoz.org 可达性探测结果（isolate 内存，无跨请求持久化）：
+// fwOrigin 是用户配置的默认 profile 所在域名。探测 fwOrigin + /suyu/manifest.json
+//（用户指定默认 profile 路径），成功 2xx/3xx 即认为可达。
+// 指数退避缓存：可达 15s；不可达 5m→10m→30m→1h→2h→4h→8h→16h→24h（封顶），
+// 恢复后重新从 15s 开始。
+let doubanFwAlive: boolean | null = null;
+let doubanFwProbeAt = 0;
+let doubanFwFailCount = 0;
+
+export function doubanFwProbeUrl(): string {
+  return DOUBAN_FW_ORIGIN + DOUBAN_FW_PROBE_PATH;
+}
+
+export function doubanFwCacheState(): { alive: boolean | null; failCount: number } {
+  return { alive: doubanFwAlive, failCount: doubanFwFailCount };
+}
+
+export function resetDoubanFwCache(): void {
+  doubanFwAlive = null;
+  doubanFwProbeAt = 0;
+  doubanFwFailCount = 0;
+}
+
+export function doubanFwTtlMs(alive: boolean, failCount: number): number {
+  if (alive) return DOUBAN_FW_OK_TTL_MS;
+  if (failCount <= 0) return DOUBAN_FW_OK_TTL_MS;
+  // 失败退避序列：5m → 10m → 30m → 1h → 2h → 4h → 8h → 16h → 24h（封顶）
+  // n<=2 线性（n），n>=3 起 6×2^(n-3)（30m 后每次 ×2）
+  const mult = failCount <= 2 ? failCount : 6 * Math.pow(2, failCount - 3);
+  return Math.min(mult * DOUBAN_FW_FAIL_TTL_BASE_MS, DOUBAN_FW_FAIL_TTL_MAX_MS);
+}
+
+async function probeDoubanFw(): Promise<boolean> {
+  const now = Date.now();
+  const ttl = doubanFwTtlMs(doubanFwAlive ?? true, doubanFwFailCount);
+  if (now - doubanFwProbeAt < ttl) {
+    return doubanFwAlive ?? false;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+  let alive = false;
+  try {
+    const resp = await fetch(doubanFwProbeUrl(), {
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    });
+    alive = resp.ok || resp.status >= 300 && resp.status < 400;
+  } catch {
+    alive = false;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  doubanFwProbeAt = now;
+  if (alive) {
+    doubanFwAlive = true;
+    doubanFwFailCount = 0;
+  } else {
+    doubanFwAlive = false;
+    doubanFwFailCount += 1;
+  }
+  return alive;
+}
+
+// fw 可达 → 307 到 fw 域名（去掉 /douban 前缀）。
+// fw 不可达 → 现有反代逻辑（DOUBAN_ORIGIN）。
+// 探测失败也回退反代，不阻塞本次请求。
+export async function doubanOriginChoice(): Promise<string> {
+  const alive = await probeDoubanFw();
+  return alive ? DOUBAN_FW_ORIGIN : DOUBAN_ORIGIN;
+}
+
 export function rewriteDoubanLocation(loc: string | null, baseUrl: string): string | null {
   if (!loc) return null;
   try {
@@ -381,6 +454,21 @@ export async function handleDoubanRequest(request: Request, ctx: ExecutionContex
 
   const url = new URL(request.url);
   const subpath = url.pathname.slice(DOUBAN_BASE_PATH.length) || "/";
+  const origin = await doubanOriginChoice();
+
+  // fw 可达：直接 307 到 fw 域名，去掉 /douban 前缀，客户端后续请求全走 fw。
+  // 保留 query（CDN 签名等）。
+  if (origin === DOUBAN_FW_ORIGIN) {
+    return new Response(null, {
+      status: 307,
+      headers: {
+        Location: DOUBAN_FW_ORIGIN + subpath + url.search,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  // fw 不可达：回退 VPS 直连反代（现有逻辑，不跳转）
   const target = DOUBAN_ORIGIN + subpath + url.search;
 
   // 白名单重建请求头：天然剔除 host / cf-* / x-forwarded-* / x-real-ip

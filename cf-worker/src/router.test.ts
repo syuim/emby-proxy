@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   isPrivateHost,
   normalizePath,
@@ -10,7 +10,17 @@ import {
   rewriteDoubanBody,
   rewriteDoubanHtml,
   rewriteDoubanJs,
+  doubanOriginChoice,
+  doubanFwProbeUrl,
+  doubanFwTtlMs,
+  resetDoubanFwCache,
 } from "./router";
+import {
+  DOUBAN_ORIGIN,
+  DOUBAN_FW_ORIGIN,
+  DOUBAN_FW_OK_TTL_MS,
+  DOUBAN_FW_FAIL_TTL_BASE_MS,
+} from "./constants";
 
 describe("isPrivateHost", () => {
   it.each([
@@ -310,5 +320,134 @@ describe("isDoubanCacheablePath", () => {
     ["/login", false],
   ])("does not cache %s", (path, expected) => {
     expect(isDoubanCacheablePath(path)).toBe(expected);
+  });
+});
+
+describe("doubanFwTtlMs", () => {
+  it("alive is fixed 15s", () => {
+    expect(doubanFwTtlMs(true, 0)).toBe(15_000);
+    expect(doubanFwTtlMs(true, 10)).toBe(15_000);
+  });
+
+  it("fail backoff doubles and caps at 24h", () => {
+    expect(doubanFwTtlMs(false, 0)).toBe(15_000);
+    expect(doubanFwTtlMs(false, 1)).toBe(5 * 60_000);
+    expect(doubanFwTtlMs(false, 2)).toBe(10 * 60_000);
+    expect(doubanFwTtlMs(false, 3)).toBe(30 * 60_000);
+    expect(doubanFwTtlMs(false, 4)).toBe(60 * 60_000);
+    expect(doubanFwTtlMs(false, 5)).toBe(2 * 60 * 60_000);
+    expect(doubanFwTtlMs(false, 6)).toBe(4 * 60 * 60_000);
+    expect(doubanFwTtlMs(false, 7)).toBe(8 * 60 * 60_000);
+    expect(doubanFwTtlMs(false, 8)).toBe(16 * 60 * 60_000);
+    expect(doubanFwTtlMs(false, 9)).toBe(24 * 60 * 60_000);
+    expect(doubanFwTtlMs(false, 20)).toBe(24 * 60 * 60_000);
+  });
+});
+
+describe("doubanOriginChoice (probe cache)", () => {
+  const probeUrl = doubanFwProbeUrl();
+
+  afterEach(() => {
+    resetDoubanFwCache();
+    vi.restoreAllMocks();
+  });
+
+  it("returns fw origin when fw manifest is reachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("ok", { status: 200 })),
+    );
+    expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+    expect(fetch).toHaveBeenCalledWith(probeUrl, expect.anything());
+  });
+
+  it("returns rn origin when fw manifest returns 404", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("nf", { status: 404 })),
+    );
+    expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN);
+  });
+
+  it("returns rn origin when fw probe throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN);
+  });
+
+  it("caches success for 15s without re-probing", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+    expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-probes after success ttl elapses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }))
+      .mockResolvedValueOnce(new Response("nf", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    try {
+      expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+      await vi.advanceTimersByTimeAsync(DOUBAN_FW_OK_TTL_MS + 1);
+      expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies exponential backoff on repeated failures", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("nf", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    try {
+      // 第 1 次失败：ttl 5m
+      expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN);
+      await vi.advanceTimersByTimeAsync(DOUBAN_FW_FAIL_TTL_BASE_MS - 1);
+      expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN); // 缓存内，不再探测
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2);
+      expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN); // 第 2 次探测仍失败
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      // 第 2 次失败后 ttl 10m
+      await vi.advanceTimersByTimeAsync(DOUBAN_FW_FAIL_TTL_BASE_MS * 2 - 1);
+      expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN); // 缓存内
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers after a failed streak: success resets fail count", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("nf", { status: 404 }))
+      .mockResolvedValueOnce(new Response("nf", { status: 404 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.useFakeTimers();
+    try {
+      expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN); // fail 1
+      await vi.advanceTimersByTimeAsync(DOUBAN_FW_FAIL_TTL_BASE_MS);
+      expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN); // fail 2
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(DOUBAN_FW_FAIL_TTL_BASE_MS * 2);
+      expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN); // 恢复
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      // 恢复后：15s 内不探测，且失败计数清零（下一轮失败从 5m 重新开始）
+      await vi.advanceTimersByTimeAsync(DOUBAN_FW_OK_TTL_MS - 1);
+      expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
