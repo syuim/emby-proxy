@@ -292,8 +292,10 @@ export async function handleTmdbRequest(request: Request): Promise<Response> {
 
 // ---------- Douban 反向代理（Worker 直接转发，不走节点） ----------
 // 反代 Stremio 豆瓣 addon（DOUBAN_ORIGIN，见 constants.ts）。UA 透传以保留
-// forward 行为；注入 X-Forwarded-Host/Proto 让 addon 生成的图片 URL 指向
-// Worker（闭环到 /douban/image-proxy）；响应 JSON 中的图片 URL 做前缀改写兜底。
+// forward 行为；注入 X-Forwarded-Host/Proto 让 addon 生成指向 Worker 的
+// origin 绝对 URL（图片 /image-proxy、manifestUrl），响应文本统一做
+// /douban 前缀改写：JSON（绝对 URL）、HTML（root-relative 链接）、
+// JS（fetch 路径），保证登录/保存/图片全链路闭环不脱离前缀。
 
 // catalog 等 JSON 不强制缓存（cacheEverything）：UA 不进 CF cache key，
 // forward UA 的 tmdb: ID 响应会污染普通 UA 的缓存。仅图片与前端静态资源可缓存。
@@ -326,14 +328,38 @@ export function rewriteDoubanLocation(loc: string | null, baseUrl: string): stri
   return loc;
 }
 
+// 通用绝对 URL 前缀改写：addon 的 getOrigin 基于 X-Forwarded-Host/Proto（被
+// 剥离时退回 r.Host）生成 origin + /path 形式的 URL——图片 /image-proxy、
+// 保存配置返回的 manifestUrl /<id>/manifest.json。直连模式见 doubanOrigin、
+// XFH 模式见 workerOrigin，统一改写为 workerOrigin + /douban 前缀闭环。
+// \u0000 占位保护已带前缀的 URL，避免 doubanOrigin→prefixed 产物被
+// workerOrigin 规则二次加前缀（/douban/douban）。
 export function rewriteDoubanBody(text: string, workerOrigin: string, doubanOrigin: string): string {
-  const suffix = "/image-proxy";
-  const target = workerOrigin + DOUBAN_BASE_PATH + suffix;
+  const prefixed = workerOrigin + DOUBAN_BASE_PATH;
   let out = text;
-  for (const origin of [workerOrigin, doubanOrigin]) {
-    out = out.split(origin + suffix).join(target);
-  }
-  return out;
+  out = out.split(doubanOrigin).join(prefixed);
+  out = out.split(prefixed).join("\u0000");
+  out = out.split(workerOrigin).join(prefixed);
+  return out.split("\u0000").join(prefixed);
+}
+
+// HTML 页面（/login、/configure）：addon 模板全是 root-relative 链接
+// （form action="/login"、href="/assets/..."、/icon.png），浏览器基于页面 URL
+// 解析会脱离 /douban 前缀而 404；改写为 /douban 前缀。绝对 URL 规则再兜底
+// __INITIAL_DATA__ 里的 manifestUrl。
+export function rewriteDoubanHtml(text: string, workerOrigin: string, doubanOrigin: string): string {
+  const out = text.replace(/(\b(?:href|src|action)\s*=\s*["'])\/(?!\/)/g, `$1${DOUBAN_BASE_PATH}/`);
+  return rewriteDoubanBody(out, workerOrigin, doubanOrigin);
+}
+
+// 前端静态资源（/assets/）：压缩 JS 里 root-relative 请求字符串
+// fetch("/configure") 加前缀。history.replaceState 的 `/${configId}/configure`
+// 模板不改写：configId 提取自改写后 manifestUrl 的第一段（douban），加前缀会
+// 得到 /douban/douban/configure；不改写则地址栏落在 /douban/configure，
+// 刷新后 302 回默认配置页，不 404。
+export function rewriteDoubanJs(text: string, workerOrigin: string, doubanOrigin: string): string {
+  const out = text.replace(/(["'`])\/configure(?=[^a-zA-Z0-9])/g, `$1${DOUBAN_BASE_PATH}/configure`);
+  return rewriteDoubanBody(out, workerOrigin, doubanOrigin);
 }
 
 export async function handleDoubanRequest(request: Request): Promise<Response> {
@@ -393,24 +419,32 @@ export async function handleDoubanRequest(request: Request): Promise<Response> {
     if (rewritten) respHeaders.set("Location", rewritten);
   }
 
-  // catalog/meta JSON 重写：图片 URL 前缀 image-proxy → /douban/image-proxy
-  if (
-    resp.status === 200 &&
-    (respHeaders.get("content-type") || "").includes("json")
-  ) {
-    try {
-      const text = await resp.clone().text();
-      const rewritten = rewriteDoubanBody(text, url.origin, DOUBAN_ORIGIN);
-      if (rewritten !== text) {
-        respHeaders.delete("Content-Length");
-        return new Response(rewritten, {
-          status: resp.status,
-          statusText: resp.statusText,
-          headers: respHeaders,
-        });
+  // 文本响应改写：JSON（图片 URL / manifestUrl 绝对地址）、HTML（root-relative
+  // 链接）、JS（fetch 路径）都要加 /douban 前缀，否则浏览器脱离前缀 404
+  if (resp.status === 200) {
+    const ct = (respHeaders.get("content-type") || "").toLowerCase();
+    if (ct.includes("json") || ct.includes("html") || ct.includes("javascript")) {
+      try {
+        const text = await resp.clone().text();
+        let rewritten = text;
+        if (ct.includes("html")) {
+          rewritten = rewriteDoubanHtml(text, url.origin, DOUBAN_ORIGIN);
+        } else if (ct.includes("javascript")) {
+          rewritten = rewriteDoubanJs(text, url.origin, DOUBAN_ORIGIN);
+        } else {
+          rewritten = rewriteDoubanBody(text, url.origin, DOUBAN_ORIGIN);
+        }
+        if (rewritten !== text) {
+          respHeaders.delete("Content-Length");
+          return new Response(rewritten, {
+            status: resp.status,
+            statusText: resp.statusText,
+            headers: respHeaders,
+          });
+        }
+      } catch (e) {
+        console.log("Douban body rewrite failed:", (e as Error).message);
       }
-    } catch (e) {
-      console.log("Douban body rewrite failed:", (e as Error).message);
     }
   }
 

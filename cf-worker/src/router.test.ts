@@ -8,6 +8,8 @@ import {
   isDoubanCacheablePath,
   rewriteDoubanLocation,
   rewriteDoubanBody,
+  rewriteDoubanHtml,
+  rewriteDoubanJs,
 } from "./router";
 
 describe("isPrivateHost", () => {
@@ -172,31 +174,115 @@ describe("rewriteDoubanLocation", () => {
 
 describe("rewriteDoubanBody", () => {
   const worker = "https://proxy.laoz.org";
+  const douban = "http://rn.127315.xyz:31001";
 
   it("rewrites worker-origin image-proxy urls", () => {
     const body = `{"poster":"https://proxy.laoz.org/image-proxy?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`;
-    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(
+    expect(rewriteDoubanBody(body, worker, douban)).toBe(
       `{"poster":"https://proxy.laoz.org/douban/image-proxy?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`,
     );
   });
 
-  it("rewrites douban-origin image-proxy urls (openresty stripped X-Forwarded-Host)", () => {
-    const body = `{"poster":"https://fw-douban.laoz.org/image-proxy?url=x"}`;
-    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(
+  it("rewrites direct-origin urls (X-Forwarded-Host stripped)", () => {
+    const body = `{"poster":"http://rn.127315.xyz:31001/image-proxy?url=x"}`;
+    expect(rewriteDoubanBody(body, worker, douban)).toBe(
       `{"poster":"https://proxy.laoz.org/douban/image-proxy?url=x"}`,
     );
   });
 
+  it("rewrites manifestUrl from configure save", () => {
+    const body = `{"success":true,"manifestUrl":"https://proxy.laoz.org/suyu/manifest.json"}`;
+    expect(rewriteDoubanBody(body, worker, douban)).toBe(
+      `{"success":true,"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json"}`,
+    );
+  });
+
+  it("does not double-prefix already-prefixed urls", () => {
+    const body = `{"url":"https://proxy.laoz.org/douban/image-proxy?url=x"}`;
+    expect(rewriteDoubanBody(body, worker, douban)).toBe(body);
+  });
+
   it("leaves encoded query strings untouched", () => {
     const body = `{"url":"https://proxy.laoz.org/image-proxy?url=https%3A%2F%2Fexample.com%2Fa%2Fimage-proxy%2Fb.jpg"}`;
-    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(
+    expect(rewriteDoubanBody(body, worker, douban)).toBe(
       `{"url":"https://proxy.laoz.org/douban/image-proxy?url=https%3A%2F%2Fexample.com%2Fa%2Fimage-proxy%2Fb.jpg"}`,
     );
   });
 
   it("is a no-op without matches", () => {
     const body = `{"id":"douban:1","links":[{"url":"https://www.douban.com/"}]}`;
-    expect(rewriteDoubanBody(body, worker, "https://fw-douban.laoz.org")).toBe(body);
+    expect(rewriteDoubanBody(body, worker, douban)).toBe(body);
+  });
+});
+
+describe("rewriteDoubanHtml", () => {
+  const worker = "https://proxy.laoz.org";
+  const douban = "http://rn.127315.xyz:31001";
+
+  it("prefixes root-relative form action", () => {
+    const html = `<form method="POST" action="/login">`;
+    expect(rewriteDoubanHtml(html, worker, douban)).toBe(
+      `<form method="POST" action="/douban/login">`,
+    );
+  });
+
+  it("prefixes root-relative asset and icon links", () => {
+    const html =
+      `<link rel="stylesheet" href="/assets/foo.css">` +
+      `<script src="/assets/bar.js"></script>` +
+      `<link rel="icon" href="/icon.png">`;
+    expect(rewriteDoubanHtml(html, worker, douban)).toBe(
+      `<link rel="stylesheet" href="/douban/assets/foo.css">` +
+        `<script src="/douban/assets/bar.js"></script>` +
+        `<link rel="icon" href="/douban/icon.png">`,
+    );
+  });
+
+  it("keeps external and protocol-relative urls", () => {
+    const html =
+      `<a href="https://github.com/x">GitHub</a>` +
+      `<script src="https://cdn.example.com/lib.js"></script>` +
+      `<script src="//cdn.example.com/lib2.js"></script>`;
+    expect(rewriteDoubanHtml(html, worker, douban)).toBe(html);
+  });
+
+  it("rewrites manifestUrl inside __INITIAL_DATA__", () => {
+    const html =
+      `<script id="__INITIAL_DATA__" type="application/json">` +
+      `{"manifestUrl":"https://proxy.laoz.org/suyu/manifest.json"}</script>`;
+    expect(rewriteDoubanHtml(html, worker, douban)).toBe(
+      `<script id="__INITIAL_DATA__" type="application/json">` +
+        `{"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json"}</script>`,
+    );
+  });
+});
+
+describe("rewriteDoubanJs", () => {
+  const worker = "https://proxy.laoz.org";
+  const douban = "http://rn.127315.xyz:31001";
+
+  it("prefixes fetch configure call", () => {
+    const js = `const res=await fetch(\`/configure\${p?"?"+p:""}\`,{method:"POST"});`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `const res=await fetch(\`/douban/configure\${p?"?"+p:""}\`,{method:"POST"});`,
+    );
+  });
+
+  it("prefixes double-quoted configure path", () => {
+    const js = `fetch("/configure",{method:"POST"})`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `fetch("/douban/configure",{method:"POST"})`,
+    );
+  });
+
+  it("does not touch configure-like words", () => {
+    const js = `const x="/configured";`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
+  });
+
+  it("keeps replaceState template unprefixed", () => {
+    const js = `window.history.replaceState(null,"",\`/\${configId}/configure\`);`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
   });
 });
 
