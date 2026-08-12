@@ -44,7 +44,7 @@ export default {
 
     // 一级命名空间 /douban：豆瓣 addon 反代
     if (url.pathname === DOUBAN_BASE_PATH || url.pathname.startsWith(DOUBAN_BASE_PATH + "/")) {
-      return handleDoubanRequest(request);
+      return handleDoubanRequest(request, ctx);
     }
 
     return new Response("Not Found", {

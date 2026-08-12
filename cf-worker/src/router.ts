@@ -366,7 +366,7 @@ export function rewriteDoubanJs(text: string, workerOrigin: string, doubanOrigin
   return rewriteDoubanBody(out, workerOrigin, doubanOrigin);
 }
 
-export async function handleDoubanRequest(request: Request): Promise<Response> {
+export async function handleDoubanRequest(request: Request, ctx: ExecutionContext): Promise<Response> {
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -396,21 +396,19 @@ export async function handleDoubanRequest(request: Request): Promise<Response> {
   headers.set("Referer", DOUBAN_ORIGIN + "/");
 
   const cacheable = isDoubanCacheablePath(subpath);
-  const init: RequestInit & {
-    cf?: { cacheEverything: boolean; cacheTtlByStatus: Record<string, number> };
-  } = {
+
+  // Workers Cache API 手动缓存（cf.cacheEverything 对 fetch 到非 CF 网络无效）
+  if (cacheable && request.method === "GET") {
+    const cached = await caches.default.match(request);
+    if (cached) return cached;
+  }
+
+  const init: RequestInit = {
     method: request.method,
     headers,
     redirect: "manual",
     body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
   };
-  if (cacheable) {
-    // cacheTtlByStatus 只缓存 2xx，避免把 404/错误页缓存住
-    init.cf = {
-      cacheEverything: true,
-      cacheTtlByStatus: { "200-299": 86400, "300-599": 0 },
-    };
-  }
 
   const resp = await fetch(target, init);
   const respHeaders = new Headers(resp.headers);
@@ -441,11 +439,15 @@ export async function handleDoubanRequest(request: Request): Promise<Response> {
         }
         if (rewritten !== text) {
           respHeaders.delete("Content-Length");
-          return new Response(rewritten, {
+          const newResp = new Response(rewritten, {
             status: resp.status,
             statusText: resp.statusText,
             headers: respHeaders,
           });
+          if (cacheable && resp.status >= 200 && resp.status < 300) {
+            ctx.waitUntil(caches.default.put(request, newResp.clone()));
+          }
+          return newResp;
         }
       } catch (e) {
         console.log("Douban body rewrite failed:", (e as Error).message);
@@ -459,11 +461,15 @@ export async function handleDoubanRequest(request: Request): Promise<Response> {
     respHeaders.delete("Pragma");
   }
 
-  return new Response(resp.body, {
+  const finalResp = new Response(resp.body, {
     status: resp.status,
     statusText: resp.statusText,
     headers: respHeaders,
   });
+  if (cacheable && resp.status >= 200 && resp.status < 300) {
+    ctx.waitUntil(caches.default.put(request, finalResp.clone()));
+  }
+  return finalResp;
 }
 
 // ---------- Direct proxy (auto-register) ----------
