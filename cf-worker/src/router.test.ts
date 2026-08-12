@@ -197,6 +197,13 @@ describe("rewriteDoubanBody", () => {
     );
   });
 
+  it("rewrites http-scheme worker-origin urls (X-Forwarded-Proto missing)", () => {
+    const body = `{"success":true,"manifestUrl":"http://proxy.laoz.org/suyu/manifest.json"}`;
+    expect(rewriteDoubanBody(body, worker, douban)).toBe(
+      `{"success":true,"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json"}`,
+    );
+  });
+
   it("does not double-prefix already-prefixed urls", () => {
     const body = `{"url":"https://proxy.laoz.org/douban/image-proxy?url=x"}`;
     expect(rewriteDoubanBody(body, worker, douban)).toBe(body);

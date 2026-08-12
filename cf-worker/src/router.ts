@@ -331,15 +331,19 @@ export function rewriteDoubanLocation(loc: string | null, baseUrl: string): stri
 // 通用绝对 URL 前缀改写：addon 的 getOrigin 基于 X-Forwarded-Host/Proto（被
 // 剥离时退回 r.Host）生成 origin + /path 形式的 URL——图片 /image-proxy、
 // 保存配置返回的 manifestUrl /<id>/manifest.json。直连模式见 doubanOrigin、
-// XFH 模式见 workerOrigin，统一改写为 workerOrigin + /douban 前缀闭环。
-// \u0000 占位保护已带前缀的 URL，避免 doubanOrigin→prefixed 产物被
-// workerOrigin 规则二次加前缀（/douban/douban）。
+// XFH 模式见 workerOrigin（线上实测 X-Forwarded-Proto 未生效，addon 退回
+// http scheme，故 http 变体一并处理），统一改写为 workerOrigin + /douban
+// 前缀闭环。\u0000/\u0001 占位保护已带前缀或 http 变体的 URL，避免
+// doubanOrigin→prefixed 产物被后续规则二次加前缀（/douban/douban）。
 export function rewriteDoubanBody(text: string, workerOrigin: string, doubanOrigin: string): string {
   const prefixed = workerOrigin + DOUBAN_BASE_PATH;
+  const workerHttp = workerOrigin.replace(/^https:/, "http:");
   let out = text;
   out = out.split(doubanOrigin).join(prefixed);
   out = out.split(prefixed).join("\u0000");
+  out = out.split(workerHttp).join("\u0001");
   out = out.split(workerOrigin).join(prefixed);
+  out = out.split("\u0001").join(prefixed);
   return out.split("\u0000").join(prefixed);
 }
 
