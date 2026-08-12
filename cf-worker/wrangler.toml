@@ -17,6 +17,15 @@ database_id = "a4c1dbf8-e140-4612-86fe-d7e83dafc59b"
 [triggers]
 crons = ["*/5 * * * *"]
 
+# 可观测性：开启日志采集（全量采样），traces 不启用
+# head_sampling_rate 只声明一次（顶层即日志采样率，默认 1=100%），嵌套 logs 无需重复
+[observability]
+enabled = true
+head_sampling_rate = 1
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 # Secrets（用 `wrangler secret put <NAME>` 写入，不要写在这里）：
 #   ADMIN_TOKEN       管理 UI 登录与 import 接口
 #   EMBY_SYNC_TOKEN   与所有节点共享，推 /admin/sync 时用
