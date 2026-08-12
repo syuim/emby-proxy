@@ -346,18 +346,19 @@ describe("doubanFwTtlMs", () => {
 
 describe("doubanOriginChoice (probe cache)", () => {
   const probeUrl = doubanFwProbeUrl();
+  const fwWithProfile = DOUBAN_FW_ORIGIN + "/suyu";
 
   afterEach(() => {
     resetDoubanFwCache();
     vi.restoreAllMocks();
   });
 
-  it("returns fw origin when fw manifest is reachable", async () => {
+  it("returns fw origin with profile prefix when fw manifest is reachable", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(new Response("ok", { status: 200 })),
     );
-    expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+    expect(await doubanOriginChoice()).toBe(fwWithProfile);
     expect(fetch).toHaveBeenCalledWith(probeUrl, expect.anything());
   });
 
@@ -379,8 +380,8 @@ describe("doubanOriginChoice (probe cache)", () => {
       .fn()
       .mockResolvedValueOnce(new Response("ok", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
-    expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+    expect(await doubanOriginChoice()).toBe(fwWithProfile);
+    expect(await doubanOriginChoice()).toBe(fwWithProfile);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -392,7 +393,7 @@ describe("doubanOriginChoice (probe cache)", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.useFakeTimers();
     try {
-      expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+      expect(await doubanOriginChoice()).toBe(fwWithProfile);
       await vi.advanceTimersByTimeAsync(DOUBAN_FW_OK_TTL_MS + 1);
       expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN);
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -439,12 +440,12 @@ describe("doubanOriginChoice (probe cache)", () => {
       expect(await doubanOriginChoice()).toBe(DOUBAN_ORIGIN); // fail 2
       expect(fetchMock).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(DOUBAN_FW_FAIL_TTL_BASE_MS * 2);
-      expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN); // 恢复
+      expect(await doubanOriginChoice()).toBe(fwWithProfile); // 恢复
       expect(fetchMock).toHaveBeenCalledTimes(3);
 
       // 恢复后：15s 内不探测，且失败计数清零（下一轮失败从 5m 重新开始）
       await vi.advanceTimersByTimeAsync(DOUBAN_FW_OK_TTL_MS - 1);
-      expect(await doubanOriginChoice()).toBe(DOUBAN_FW_ORIGIN);
+      expect(await doubanOriginChoice()).toBe(fwWithProfile);
       expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();

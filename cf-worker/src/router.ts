@@ -1,4 +1,4 @@
-import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_FW_ORIGIN, DOUBAN_FW_PROBE_PATH, DOUBAN_FW_OK_TTL_MS, DOUBAN_FW_FAIL_TTL_BASE_MS, DOUBAN_FW_FAIL_TTL_MAX_MS } from "./constants";
+import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_FW_ORIGIN, DOUBAN_FW_PROFILE_PATH, DOUBAN_FW_PROBE_PATH, DOUBAN_FW_OK_TTL_MS, DOUBAN_FW_FAIL_TTL_BASE_MS, DOUBAN_FW_FAIL_TTL_MAX_MS } from "./constants";
 import { readEmbys, readNodes, writeEmbys } from "./storage";
 import { immediateProbe } from "./health";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
@@ -380,12 +380,12 @@ async function probeDoubanFw(): Promise<boolean> {
   return alive;
 }
 
-// fw 可达 → 307 到 fw 域名（去掉 /douban 前缀）。
+// fw 可达 → 307 到 fw 域名 + /suyu profile 前缀（去掉 /douban 前缀）。
 // fw 不可达 → 现有反代逻辑（DOUBAN_ORIGIN）。
 // 探测失败也回退反代，不阻塞本次请求。
 export async function doubanOriginChoice(): Promise<string> {
   const alive = await probeDoubanFw();
-  return alive ? DOUBAN_FW_ORIGIN : DOUBAN_ORIGIN;
+  return alive ? DOUBAN_FW_ORIGIN + DOUBAN_FW_PROFILE_PATH : DOUBAN_ORIGIN;
 }
 
 export function rewriteDoubanLocation(loc: string | null, baseUrl: string): string | null {

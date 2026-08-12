@@ -25,7 +25,10 @@ export const DOUBAN_ORIGIN = "http://rn.127315.xyz:31001";
 // /douban/* 直接 307 到 fw 域名（去掉 /douban 前缀），免 Worker 中转；
 // 不可达时回退 DOUBAN_ORIGIN 反代。
 export const DOUBAN_FW_ORIGIN = "https://fw-douban.laoz.org";
-export const DOUBAN_FW_PROBE_PATH = "/suyu/manifest.json";
+// fw 上 addon 实例的 profile 前缀（nginx 根路径是默认配置；用户配置的
+// profile 是 /suyu，307 跳转必须带此前缀才命中用户配置的图源/行为）
+export const DOUBAN_FW_PROFILE_PATH = "/suyu";
+export const DOUBAN_FW_PROBE_PATH = DOUBAN_FW_PROFILE_PATH + "/manifest.json";
 // fw 探活指数退避缓存：成功 15s；失败 5m → 10m → 30m → 1h → 2h → 4h → 8h
 // → 16h → 24h（封顶），恢复后重新从 15s 开始
 // 成功能级：15s
