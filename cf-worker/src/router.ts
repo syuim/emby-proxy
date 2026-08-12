@@ -456,13 +456,13 @@ export async function handleDoubanRequest(request: Request, ctx: ExecutionContex
   const subpath = url.pathname.slice(DOUBAN_BASE_PATH.length) || "/";
   const origin = await doubanOriginChoice();
 
-  // fw 可达：直接 307 到 fw 域名，去掉 /douban 前缀，客户端后续请求全走 fw。
-  // 保留 query（CDN 签名等）。
-  if (origin === DOUBAN_FW_ORIGIN) {
+  // fw 可达：直接 307 到 fw 域名 + /suyu profile，去掉 /douban 前缀，
+  // 客户端后续请求全走 fw。保留 query（CDN 签名等）。
+  if (origin.startsWith(DOUBAN_FW_ORIGIN)) {
     return new Response(null, {
       status: 307,
       headers: {
-        Location: DOUBAN_FW_ORIGIN + subpath + url.search,
+        Location: origin + subpath + url.search,
         "Cache-Control": "no-store",
       },
     });

@@ -14,6 +14,7 @@ import {
   doubanFwProbeUrl,
   doubanFwTtlMs,
   resetDoubanFwCache,
+  handleDoubanRequest,
 } from "./router";
 import {
   DOUBAN_ORIGIN,
@@ -450,5 +451,51 @@ describe("doubanOriginChoice (probe cache)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("handleDoubanRequest 307 branch", () => {
+  const fakeCtx = { waitUntil: () => {} } as unknown as ExecutionContext;
+
+  afterEach(() => {
+    resetDoubanFwCache();
+    vi.restoreAllMocks();
+  });
+
+  it("307 to fw origin + /suyu profile when fw reachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("ok", { status: 200 })),
+    );
+    const req = new Request("http://worker.local/douban/catalog/movie/movie_top250.json?skip=0");
+    const resp = await handleDoubanRequest(req, fakeCtx);
+    expect(resp.status).toBe(307);
+    expect(resp.headers.get("Location")).toBe(
+      "https://fw-douban.laoz.org/suyu/catalog/movie/movie_top250.json?skip=0",
+    );
+    // 307 分支只应有一次 fetch（探测），不反代
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to rn proxy when fw unreachable (no 307)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce(new Response("nf", { status: 404 })) // 探测失败
+        .mockResolvedValueOnce(
+          new Response('{"metas":[]}', {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ), // 反代 rn
+    );
+    const req = new Request("http://worker.local/douban/catalog/movie/movie_top250.json?skip=0");
+    const resp = await handleDoubanRequest(req, fakeCtx);
+    expect(resp.status).toBe(200);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const secondCall = (fetch as ReturnType<typeof vi.fn>).mock.calls[1];
+    expect(secondCall[0]).toBe(
+      "http://rn.127315.xyz:31001/catalog/movie/movie_top250.json?skip=0",
+    );
   });
 });
