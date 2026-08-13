@@ -22,7 +22,7 @@ export const DOUBAN_BASE_PATH = "/douban";
 // 一级功能命名空间：TMDB 反代 /tmdb/...
 export const TMDB_BASE_PATH = "/tmdb";
 // 豆瓣 addon 原始后端（VPS 直连；fw-douban.laoz.org 是 nginx 前置，不依赖它）
-export const DOUBAN_ORIGIN = "http://rn.127315.xyz:31001";
+export const DOUBAN_ORIGIN = "http://de.127315.xyz:31001";
 
 // emby.node_id 哨兵值：Worker 本地代理（不 307，Worker 直接 fetch 后端回传）
 export const LOCAL_NODE_ID = "local";
