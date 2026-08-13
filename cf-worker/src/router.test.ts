@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DOUBAN_ORIGIN } from "./constants";
 import {
   isPrivateHost,
   normalizePath,
@@ -193,7 +194,7 @@ describe("rewriteDoubanLocation", () => {
 
 describe("rewriteDoubanBody", () => {
   const worker = "https://proxy.laoz.org";
-  const douban = "http://de.127315.xyz:31001";
+  const douban = DOUBAN_ORIGIN;
 
   it("rewrites worker-origin image-proxy urls", () => {
     const body = `{"poster":"https://proxy.laoz.org/image-proxy?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`;
@@ -203,7 +204,7 @@ describe("rewriteDoubanBody", () => {
   });
 
   it("rewrites direct-origin urls (X-Forwarded-Host stripped)", () => {
-    const body = `{"poster":"http://de.127315.xyz:31001/image-proxy?url=x"}`;
+    const body = `{"poster":"${DOUBAN_ORIGIN}/image-proxy?url=x"}`;
     expect(rewriteDoubanBody(body, worker, douban)).toBe(
       `{"poster":"https://proxy.laoz.org/douban/image-proxy?url=x"}`,
     );
@@ -243,7 +244,7 @@ describe("rewriteDoubanBody", () => {
 
 describe("rewriteDoubanHtml", () => {
   const worker = "https://proxy.laoz.org";
-  const douban = "http://de.127315.xyz:31001";
+  const douban = DOUBAN_ORIGIN;
 
   it("prefixes root-relative form action", () => {
     const html = `<form method="POST" action="/login">`;
@@ -285,7 +286,7 @@ describe("rewriteDoubanHtml", () => {
 
 describe("rewriteDoubanJs", () => {
   const worker = "https://proxy.laoz.org";
-  const douban = "http://de.127315.xyz:31001";
+  const douban = DOUBAN_ORIGIN;
 
   it("prefixes fetch configure call", () => {
     const js = `const res=await fetch(\`/configure\${p?"?"+p:""}\`,{method:"POST"});`;
