@@ -7,6 +7,12 @@ compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = false
 account_id = "9a2c5f84e3346b4d2310792e4f759881"
 
+# Placement：定点部署到 dash.laoz.org 所在机房附近（HTTP HEAD 探测定位），
+# 避免每次面板手动改（线上原先 targeted target=184691 为面板旧格式）
+[placement]
+mode = "targeted"
+hostname = "dash.laoz.org"
+
 # D1 数据库（强一致）
 [[d1_databases]]
 binding = "EMBY_DB"
