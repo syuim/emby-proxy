@@ -7,11 +7,13 @@ compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = false
 account_id = "9a2c5f84e3346b4d2310792e4f759881"
 
-# Placement：定点部署到 dash.laoz.org 所在机房附近（HTTP HEAD 探测定位），
-# 避免每次面板手动改（线上原先 targeted target=184691 为面板旧格式）
+# Placement：强制跑到法兰克福机房（FRA），对应用户需求——Worker 固定跑在德国
+# region 用 aws:eu-central-1（法兰克福区域），CF 会部署到离该区域最近的机房（FRA）
+# 注意：wrangler deploy 不应用 placement（script 级设置），需线上 API PATCH settings 生效；
+# toml 配置用于文档化 + script 重建时自动应用
 [placement]
 mode = "targeted"
-hostname = "dash.laoz.org"
+region = "aws:eu-central-1"
 
 # D1 数据库（强一致）
 [[d1_databases]]
