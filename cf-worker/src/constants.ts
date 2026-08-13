@@ -19,6 +19,8 @@ export const EMBY_BASE_PATH = "/emby";
 export const IMG_BASE_PATH = "/img";
 // 一级功能命名空间：豆瓣 addon 反代 /douban/...
 export const DOUBAN_BASE_PATH = "/douban";
+// 一级功能命名空间：TMDB 反代 /tmdb/...
+export const TMDB_BASE_PATH = "/tmdb";
 // 豆瓣 addon 原始后端（VPS 直连；fw-douban.laoz.org 是 nginx 前置，不依赖它）
 export const DOUBAN_ORIGIN = "http://rn.127315.xyz:31001";
 

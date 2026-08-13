@@ -70,8 +70,8 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 - `/emby/<name>/path`：名称访问，走节点选择
 - `/emby/http(s)://...`：地址访问（原样或 URL 编码），必走本地代理，无鉴权
-- `/emby/tmdb/...`：TMDB 反代
 - `/emby/admin`：管理 UI / API
+- `/tmdb/...`：TMDB 反代（一级命名空间，逻辑同原 `/emby/tmdb`）。GET 且路径以 `/t/p/` 开头（TMDB 图片固定结构）时转发到 `image.tmdb.org` 并复用 `/img` 图片代理（UA 伪装 + Referer 规则 + CF 边缘缓存），其余路径转发到 `api.themoviedb.org`
 - `/img`：通用图片代理，无鉴权
 - `/douban/...`：豆瓣 Stremio addon 反代（`http://rn.127315.xyz:31001` 直连，不依赖 fw-douban.laoz.org），无鉴权。UA 透传保留 forward 行为；注入 `X-Forwarded-Host/Proto` 使 addon 生成的 origin 绝对 URL（图片 `/image-proxy`、保存配置返回的 `manifestUrl`）指向 Worker（线上实测 `X-Forwarded-Proto` 未生效，addon 退回 http scheme，改写需兜底 http/https 双变体）；响应文本统一前缀改写保证闭环：JSON 绝对 URL、HTML root-relative 链接（form action / assets / icon，200 与 401 登录失败页均改写）、JS `fetch("/configure")` 路径；`history.replaceState` 的 `/${configId}/configure` 模板**不**改写（configId 提取自改写后 manifestUrl 第一段，加前缀会变 `/douban/douban/configure`；不改写则地址栏落在 `/douban/configure`，刷新 302 回默认配置页）。仅 `/image-proxy` 与 `/assets/` 走 CF 边缘缓存，catalog 等 JSON 不缓存（UA 不进 cache key，forward UA 的 `tmdb:` ID 响应会污染普通缓存）
 - 根路径 `/` 302 到 `/emby/admin`；`/__health` 保留在顶层；其余一级路径 404

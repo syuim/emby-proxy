@@ -1,5 +1,5 @@
 import { routeAdmin } from "./admin";
-import { EMBY_BASE_PATH, IMG_BASE_PATH, DOUBAN_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, IMG_BASE_PATH, DOUBAN_BASE_PATH, TMDB_BASE_PATH } from "./constants";
 import { handleDoubanGallery } from "./douban-gallery";
 import { runHealthCycle } from "./health";
 import { handleImgRequest } from "./imgproxy";
@@ -20,16 +20,18 @@ export default {
       return Response.redirect(new URL(EMBY_BASE_PATH + "/admin", url).toString(), 302);
     }
 
-    // 一级命名空间 /emby：admin、tmdb、地址访问、名称访问
+    // 一级命名空间 /tmdb：TMDB 反代（提到最前，逻辑不变）
+    if (url.pathname === TMDB_BASE_PATH || url.pathname.startsWith(TMDB_BASE_PATH + "/")) {
+      return handleTmdbRequest(request, env);
+    }
+
+    // 一级命名空间 /emby：admin、地址访问、名称访问
     if (url.pathname.startsWith(EMBY_BASE_PATH + "/")) {
       const rest = url.pathname.slice(EMBY_BASE_PATH.length + 1);
       const second = rest.split("/")[0];
 
       if (second === "admin") {
         return routeAdmin(request, env, ctx);
-      }
-      if (second === "tmdb") {
-        return handleTmdbRequest(request);
       }
       // 地址访问 /emby/http(s)://...（原样或 URL 编码）→ 必走本地代理
       if (/^https?(:\/\/|%3A)/i.test(rest)) {

@@ -10,6 +10,7 @@ import {
   rewriteDoubanBody,
   rewriteDoubanHtml,
   rewriteDoubanJs,
+  isTmdbImageSubpath,
 } from "./router";
 
 describe("isPrivateHost", () => {
@@ -92,6 +93,24 @@ describe("isCacheableImageRequest", () => {
 
   it("is case-insensitive on path", () => {
     expect(isCacheableImageRequest(makeReq("GET"), "/emby/images/primary")).toBe(true);
+  });
+});
+
+describe("isTmdbImageSubpath", () => {
+  it("accepts standard TMDB image paths", () => {
+    expect(isTmdbImageSubpath("/t/p/original/abc123.jpg")).toBe(true);
+    expect(isTmdbImageSubpath("/t/p/w500/abc123.png")).toBe(true);
+  });
+
+  it("rejects API paths", () => {
+    expect(isTmdbImageSubpath("/3/movie/123")).toBe(false);
+    expect(isTmdbImageSubpath("/3/search/movie")).toBe(false);
+  });
+
+  it("rejects edge cases", () => {
+    expect(isTmdbImageSubpath("/t/p")).toBe(false);
+    expect(isTmdbImageSubpath("/t/p/other/abc")).toBe(true); // /t/p/ 下任何子路径都视为图片
+    expect(isTmdbImageSubpath("/")).toBe(false);
   });
 });
 

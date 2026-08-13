@@ -5,3 +5,6 @@ data/
 .env
 .env.local
 .codegraph/
+.commandcode/
+.netcatty-paste-images/
+CLAUDE.md
