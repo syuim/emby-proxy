@@ -1,6 +1,5 @@
 import { routeAdmin } from "./admin";
 import { EMBY_BASE_PATH, IMG_BASE_PATH, DOUBAN_BASE_PATH, TMDB_BASE_PATH } from "./constants";
-import { handleDoubanGallery } from "./douban-gallery";
 import { runHealthCycle } from "./health";
 import { handleImgRequest } from "./imgproxy";
 import { handleClientRequest, handleDirectRequest, handleDoubanRequest, handleTmdbRequest } from "./router";
@@ -46,10 +45,6 @@ export default {
     }
 
     // 一级命名空间 /douban：豆瓣 addon 反代
-    // /douban/gallery 是内置图片浏览页面，不转发到 addon
-    if (url.pathname === DOUBAN_BASE_PATH + "/gallery" || url.pathname === DOUBAN_BASE_PATH + "/gallery/") {
-      return handleDoubanGallery();
-    }
     if (url.pathname === DOUBAN_BASE_PATH || url.pathname.startsWith(DOUBAN_BASE_PATH + "/")) {
       return handleDoubanRequest(request, ctx);
     }
