@@ -36,9 +36,9 @@ interface RefererRule {
 const BUILTIN_RULES: RefererRule[] = [
   { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*sspai\.com(?:\/|$)/, referer: "https://sspai.com" },
   { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*indienova\.com(?:\/|$)/, referer: "https://indienova.com" },
-  // 豆瓣图片防盗链：img*.doubanio.com 无 Referer 返回 418
-  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*doubanio\.com(?:\/|$)/, referer: "https://movie.douban.com/" },
-  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*douban\.com(?:\/|$)/, referer: "https://movie.douban.com/" },
+  // 豆瓣图片防盗链：img*.doubanio.com 无 Referer 返回 418，douban.com 域内 Referer 均可
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*doubanio\.com(?:\/|$)/, referer: "https://douban.com/" },
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*douban\.com(?:\/|$)/, referer: "https://douban.com/" },
 ];
 
 let rulesCache: { rules: RefererRule[]; expiry: number } = { rules: [], expiry: 0 };
