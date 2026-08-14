@@ -318,9 +318,32 @@ describe("rewriteDoubanJs", () => {
     expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
   });
 
-  it("keeps replaceState template unprefixed", () => {
+  it("prefixes replaceState template with douban base path", () => {
     const js = `window.history.replaceState(null,"",\`/\${configId}/configure\`);`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `window.history.replaceState(null,"",\`/douban/\${configId}/configure\`);`,
+    );
+  });
+
+  it("extracts second-to-last path segment for configId from window.location", () => {
+    const js = `const M=window.location.pathname.split("/").filter(Boolean)[0],D=!!M&&(M==="suyu"||/^[0-9a-f-]+$/i.test(M));`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `const M=window.location.pathname.split("/").filter(Boolean).slice(-2,-1)[0],D=!!M&&(M==="suyu"||/^[0-9a-f-]+$/i.test(M));`,
+    );
+  });
+
+  it("extracts second-to-last path segment from rewritten manifestUrl", () => {
+    const js = `const L=new URL(q.manifestUrl).pathname.split("/").filter(Boolean)[0];`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `const L=new URL(q.manifestUrl).pathname.split("/").filter(Boolean).slice(-2,-1)[0];`,
+    );
+  });
+
+  it("does not rewrite other filter(Boolean)[0] usages", () => {
+    const js = `const n=items.filter(Boolean)[0];fetch(\`/configure\${p?"?"+p:""}\`);`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `const n=items.filter(Boolean)[0];fetch(\`/douban/configure\${p?"?"+p:""}\`);`,
+    );
   });
 });
 

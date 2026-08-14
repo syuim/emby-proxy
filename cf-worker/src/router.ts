@@ -385,12 +385,16 @@ export function rewriteDoubanHtml(text: string, workerOrigin: string, doubanOrig
 }
 
 // 前端静态资源（/assets/）：压缩 JS 里 root-relative 请求字符串
-// fetch("/configure") 加前缀。history.replaceState 的 `/${configId}/configure`
-// 模板不改写：configId 提取自改写后 manifestUrl 的第一段（douban），加前缀会
-// 得到 /douban/douban/configure；不改写则地址栏落在 /douban/configure，
-// 刷新后 302 回默认配置页，不 404。
+// fetch("/configure") 加前缀。addon 前端用 pathname 第一段当 configId，反代下
+// 该段是前缀（douban），保存时误判为无 id 导致后端新建 UUID 配置而非更新
+// suyu，故把 .filter(Boolean)[0] 改为取倒数第二段（兼容 /douban/{id}/configure
+// 与直连 /{id}/configure）。replaceState 的 `/${configId}/configure` 模板加前缀：
+// 改写后 manifestUrl 第一段是 douban，倒数第二段才是 configId，拼出
+// /douban/{id}/configure 让地址栏闭环，否则会落到 /douban/configure。
 export function rewriteDoubanJs(text: string, workerOrigin: string, doubanOrigin: string): string {
-  const out = text.replace(/(["'`])\/configure(?=[^a-zA-Z0-9])/g, `$1${DOUBAN_BASE_PATH}/configure`);
+  let out = text.replace(/(["'`])\/configure(?=[^a-zA-Z0-9])/g, `$1${DOUBAN_BASE_PATH}/configure`);
+  out = out.replace(/\.pathname\.split\("\/"\)\.filter\(Boolean\)\[0\]/g, `.pathname.split("/").filter(Boolean).slice(-2,-1)[0]`);
+  out = out.replace(/`\/\$\{([A-Za-z_$][A-Za-z0-9_$]*)\}\/configure`/g, (_m, v) => `\`${DOUBAN_BASE_PATH}/\${${v}}/configure\``);
   return rewriteDoubanBody(out, workerOrigin, doubanOrigin);
 }
 
