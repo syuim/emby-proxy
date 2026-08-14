@@ -58,4 +58,20 @@ describe("handleUrlRequest", () => {
     expect(r1.status).toBe(r2.status);
     expect(await r1.text()).toBe(await r2.text());
   });
+
+  it("sends movie.douban.com referer for doubanio image targets", async () => {
+    const mf = mockFetch(200, "img");
+    globalThis.fetch = mf as any;
+
+    const req = new Request(
+      `https://proxy.laoz.org${URL_BASE_PATH}?url=${encodeURIComponent("https://img9.doubanio.com/view/photo/s_ratio_poster/public/p1.jpg")}`,
+    );
+    const resp = await handleUrlRequest(req, {} as any);
+    expect(resp.status).toBe(200);
+
+    const calls = mf.mock.calls.map((c) => c as unknown as [string, RequestInit]);
+    const target = calls.find((c) => String(c[0]).includes("img9.doubanio.com"));
+    expect(target).toBeDefined();
+    expect(target![1].headers).toMatchObject({ Referer: "https://movie.douban.com/" });
+  });
 });

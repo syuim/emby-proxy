@@ -36,6 +36,9 @@ interface RefererRule {
 const BUILTIN_RULES: RefererRule[] = [
   { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*sspai\.com(?:\/|$)/, referer: "https://sspai.com" },
   { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*indienova\.com(?:\/|$)/, referer: "https://indienova.com" },
+  // 豆瓣图片防盗链：img*.doubanio.com 无 Referer 返回 418
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*doubanio\.com(?:\/|$)/, referer: "https://movie.douban.com/" },
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*douban\.com(?:\/|$)/, referer: "https://movie.douban.com/" },
 ];
 
 let rulesCache: { rules: RefererRule[]; expiry: number } = { rules: [], expiry: 0 };
@@ -46,26 +49,35 @@ async function loadRefererRules(env: Env): Promise<RefererRule[]> {
     return rulesCache.rules;
   }
   const rulesUrl = env.REFERER_RULES_URL || DEFAULT_REFERER_RULES_URL;
-  try {
-    const resp = await fetch(rulesUrl);
-    if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
-    const text = await resp.text();
-    const rules = text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && line.startsWith("https://"))
-      .flatMap((line): RefererRule[] => {
-        try {
-          const hostname = new URL(line).hostname.replace(/\./g, "\\.");
-          return [{ pattern: new RegExp(`^https://(?:[a-z0-9-]+\\.)*${hostname}(?:/|$)`), referer: line }];
-        } catch {
-          return [];
-        }
-      });
-    rulesCache = { rules: rules.length > 0 ? rules : BUILTIN_RULES, expiry: now + RULES_CACHE_TTL_MS };
-  } catch {
-    rulesCache = { rules: BUILTIN_RULES, expiry: now + RULES_CACHE_TTL_MS };
+  const externalRules = await (async () => {
+    try {
+      const resp = await fetch(rulesUrl);
+      if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+      const text = await resp.text();
+      return text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && line.startsWith("https://"))
+        .flatMap((line): RefererRule[] => {
+          try {
+            const hostname = new URL(line).hostname.replace(/\./g, "\\.");
+            return [{ pattern: new RegExp(`^https://(?:[a-z0-9-]+\\.)*${hostname}(?:/|$)`), referer: line }];
+          } catch {
+            return [];
+          }
+        });
+    } catch {
+      return [];
+    }
+  })();
+  // 内置规则始终生效（豆瓣防盗链），外部文件作增量，同 host 去重
+  const merged = [...BUILTIN_RULES];
+  for (const rule of externalRules) {
+    if (!merged.some((b) => b.pattern.source === rule.pattern.source)) {
+      merged.push(rule);
+    }
   }
+  rulesCache = { rules: merged.length > 0 ? merged : BUILTIN_RULES, expiry: now + RULES_CACHE_TTL_MS };
   return rulesCache.rules;
 }
 
