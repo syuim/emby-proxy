@@ -391,8 +391,10 @@ export function rewriteDoubanHtml(text: string, workerOrigin: string, doubanOrig
 // 与直连 /{id}/configure）。replaceState 的 `/${configId}/configure` 模板加前缀：
 // 改写后 manifestUrl 第一段是 douban，倒数第二段才是 configId，拼出
 // /douban/{id}/configure 让地址栏闭环，否则会落到 /douban/configure。
+// /api/ 端点是 addon 自身接口（cat-has-data 等），root-relative 请求同样加前缀。
 export function rewriteDoubanJs(text: string, workerOrigin: string, doubanOrigin: string): string {
   let out = text.replace(/(["'`])\/configure(?=[^a-zA-Z0-9])/g, `$1${DOUBAN_BASE_PATH}/configure`);
+  out = out.replace(/(["'`])\/api\/(?=[a-zA-Z])/g, `$1${DOUBAN_BASE_PATH}/api/`);
   out = out.replace(/\.pathname\.split\("\/"\)\.filter\(Boolean\)\[0\]/g, `.pathname.split("/").filter(Boolean).slice(-2,-1)[0]`);
   out = out.replace(/`\/\$\{([A-Za-z_$][A-Za-z0-9_$]*)\}\/configure`/g, (_m, v) => `\`${DOUBAN_BASE_PATH}/\${${v}}/configure\``);
   return rewriteDoubanBody(out, workerOrigin, doubanOrigin);

@@ -318,6 +318,25 @@ describe("rewriteDoubanJs", () => {
     expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
   });
 
+  it("prefixes fetch cat-has-data api call", () => {
+    const js = `fetch("/api/cat-has-data?ids="+encodeURIComponent(id));`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `fetch("/douban/api/cat-has-data?ids="+encodeURIComponent(id));`,
+    );
+  });
+
+  it("prefixes template-literal api path", () => {
+    const js = `fetch(\`/api/cat-has-data?ids=\${encodeURIComponent(id)}\`);`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(
+      `fetch(\`/douban/api/cat-has-data?ids=\${encodeURIComponent(id)}\`);`,
+    );
+  });
+
+  it("does not touch api-like words", () => {
+    const js = `const x="/apikey";`;
+    expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
+  });
+
   it("prefixes replaceState template with douban base path", () => {
     const js = `window.history.replaceState(null,"",\`/\${configId}/configure\`);`;
     expect(rewriteDoubanJs(js, worker, douban)).toBe(
