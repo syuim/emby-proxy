@@ -1,5 +1,6 @@
-// /img 通用图片代理：仅 GET ?url=...（固定 GET、不可自定义头/体，避免成为开放中继）
+// /img 与 /url 通用代理：仅 GET ?url=...（固定 GET、不可自定义头/体，避免成为开放中继）
 // 无鉴权。UA 未指定时随机伪装浏览器；Referer 按外部规则表自动补齐（防盗链）。
+// /url 与 /img 行为完全一致（同一实现），用于代理图片外的任意 http(s) 资源。
 import { isPrivateHost } from "./router";
 import { IMAGE_CACHE_MAX_AGE } from "./constants";
 import type { Env } from "./types";
@@ -87,6 +88,11 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"
 
 function error(msg: string, status = 400): Response {
   return new Response(msg, { status, headers: CORS_HEADERS });
+}
+
+export async function handleUrlRequest(request: Request, env: Env): Promise<Response> {
+  // /url 与 /img 同一实现，行为完全一致
+  return handleImgRequest(request, env);
 }
 
 export async function handleImgRequest(request: Request, env: Env): Promise<Response> {
