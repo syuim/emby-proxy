@@ -299,69 +299,15 @@ describe("rewriteDoubanJs", () => {
   const worker = "https://proxy.laoz.org";
   const douban = DOUBAN_ORIGIN;
 
-  it("prefixes fetch configure call", () => {
-    const js = `const res=await fetch(\`/configure\${p?"?"+p:""}\`,{method:"POST"});`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `const res=await fetch(\`/douban/configure\${p?"?"+p:""}\`,{method:"POST"});`,
-    );
-  });
-
-  it("prefixes double-quoted configure path", () => {
-    const js = `fetch("/configure",{method:"POST"})`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `fetch("/douban/configure",{method:"POST"})`,
-    );
-  });
-
-  it("does not touch configure-like words", () => {
-    const js = `const x="/configured";`;
+  it("passes through root-relative paths untouched (frontend derives base itself)", () => {
+    const js = `fetch(\`/api/cat-has-data?ids=\${encodeURIComponent(id)}\`);fetch("/configure",{method:"POST"});`;
     expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
   });
 
-  it("prefixes fetch cat-has-data api call", () => {
-    const js = `fetch("/api/cat-has-data?ids="+encodeURIComponent(id));`;
+  it("still rewrites absolute origin URLs via rewriteDoubanBody", () => {
+    const js = `const u="https://proxy.laoz.org/suyu/manifest.json";`;
     expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `fetch("/douban/api/cat-has-data?ids="+encodeURIComponent(id));`,
-    );
-  });
-
-  it("prefixes template-literal api path", () => {
-    const js = `fetch(\`/api/cat-has-data?ids=\${encodeURIComponent(id)}\`);`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `fetch(\`/douban/api/cat-has-data?ids=\${encodeURIComponent(id)}\`);`,
-    );
-  });
-
-  it("does not touch api-like words", () => {
-    const js = `const x="/apikey";`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
-  });
-
-  it("prefixes replaceState template with douban base path", () => {
-    const js = `window.history.replaceState(null,"",\`/\${configId}/configure\`);`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `window.history.replaceState(null,"",\`/douban/\${configId}/configure\`);`,
-    );
-  });
-
-  it("extracts second-to-last path segment for configId from window.location", () => {
-    const js = `const M=window.location.pathname.split("/").filter(Boolean)[0],D=!!M&&(M==="suyu"||/^[0-9a-f-]+$/i.test(M));`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `const M=window.location.pathname.split("/").filter(Boolean).slice(-2,-1)[0],D=!!M&&(M==="suyu"||/^[0-9a-f-]+$/i.test(M));`,
-    );
-  });
-
-  it("extracts second-to-last path segment from rewritten manifestUrl", () => {
-    const js = `const L=new URL(q.manifestUrl).pathname.split("/").filter(Boolean)[0];`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `const L=new URL(q.manifestUrl).pathname.split("/").filter(Boolean).slice(-2,-1)[0];`,
-    );
-  });
-
-  it("does not rewrite other filter(Boolean)[0] usages", () => {
-    const js = `const n=items.filter(Boolean)[0];fetch(\`/configure\${p?"?"+p:""}\`);`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `const n=items.filter(Boolean)[0];fetch(\`/douban/configure\${p?"?"+p:""}\`);`,
+      `const u="https://proxy.laoz.org/douban/suyu/manifest.json";`,
     );
   });
 });
