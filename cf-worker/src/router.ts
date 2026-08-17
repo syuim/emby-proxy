@@ -1,4 +1,4 @@
-import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_ORIGIN, TMDB_BASE_PATH, IMG_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, IMG_BASE_PATH } from "./constants";
 import { handleImgRequest } from "./imgproxy";
 import { readEmbys, readNodes, writeEmbys } from "./storage";
 import { immediateProbe } from "./health";
@@ -495,6 +495,50 @@ export async function handleDoubanRequest(request: Request, ctx: ExecutionContex
     ctx.waitUntil(caches.default.put(request, finalResp.clone()));
   }
   return finalResp;
+}
+
+// ---------- Douban API proxy (JSON-only, no body rewriting) ----------
+
+export async function handleDoubanApiRequest(request: Request): Promise<Response> {
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
+
+  const url = new URL(request.url);
+  const subpath = url.pathname.slice(DOUBAN_API_BASE_PATH.length) || "/";
+  const target = DOUBAN_API_ORIGIN + subpath + url.search;
+
+  const headers = new Headers();
+  for (const k of DOUBAN_FORWARD_HEADERS) {
+    const v = request.headers.get(k);
+    if (v) headers.set(k, v);
+  }
+
+  const resp = await fetch(target, {
+    method: request.method,
+    headers,
+    redirect: "manual",
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+  });
+
+  const respHeaders = new Headers(resp.headers);
+  respHeaders.set("Access-Control-Allow-Origin", "*");
+  respHeaders.set("Access-Control-Allow-Headers", "*");
+  respHeaders.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+
+  return new Response(resp.body, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: respHeaders,
+  });
 }
 
 // ---------- Direct proxy (auto-register) ----------
