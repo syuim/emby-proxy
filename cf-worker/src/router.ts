@@ -878,10 +878,64 @@ export async function handleSembyRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const subpath = url.pathname.slice(SEMBY_BASE_PATH.length) || "/";
   const target = SEMBY_ORIGIN + subpath + url.search;
-  return fetch(target, {
+
+  const resp = await fetch(target, {
     method: request.method,
     headers: request.headers,
     redirect: "manual",
     body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+  });
+
+  const respHeaders = new Headers(resp.headers);
+  respHeaders.set("Access-Control-Allow-Origin", "*");
+
+  // 计算路径前缀：请求路径中去掉发往后端的子路径，得到代理入口前缀。
+  // 如 /semby/admin → subpath=/admin → prefix=/semby；换路由值自动跟随。
+  const prefix = subpath === "/" ? SEMBY_BASE_PATH : url.pathname.slice(0, url.pathname.length - subpath.length);
+
+  // 30x：Location 加前缀，不让浏览器脱离代理入口
+  if (REDIRECT_STATUSES.has(resp.status)) {
+    const loc = respHeaders.get("Location");
+    if (loc && loc.startsWith("/") && !loc.startsWith(prefix)) {
+      respHeaders.set("Location", prefix + loc);
+    }
+  }
+
+  // HTML/JS 响应：根相对路径加前缀（href="/"、src="/"、action="/" 等）
+  // JS 中的 fetch(" 也需要加前缀，否则 API 调用脱离代理入口
+  if ((resp.status === 200 || resp.status === 401) && prefix !== "/") {
+    const ct = (respHeaders.get("content-type") || "").toLowerCase();
+    if (ct.includes("html") || ct.includes("javascript")) {
+      try {
+        const text = await resp.clone().text();
+        let rewritten = text;
+        if (ct.includes("html")) {
+          rewritten = text.replace(
+            /(\b(?:href|src|action)\s*=\s*")\/(?!\/)/g,
+            (_m, pre) => pre + prefix + "/",
+          );
+        } else {
+          // JS：给 API 路径加前缀（fetch("/admin/...")、fetch("/Users/...") 等）
+          rewritten = text.replace(
+            /(["'`])\/(admin\/|Users\/|System\/|Items\/|Sessions\/|Videos\/)/g,
+            (_m, q, path) => q + prefix + "/" + path,
+          );
+        }
+        if (rewritten !== text) {
+          respHeaders.delete("Content-Length");
+          return new Response(rewritten, {
+            status: resp.status,
+            statusText: resp.statusText,
+            headers: respHeaders,
+          });
+        }
+      } catch {}
+    }
+  }
+
+  return new Response(resp.body, {
+    status: resp.status,
+    statusText: resp.statusText,
+    headers: respHeaders,
   });
 }
