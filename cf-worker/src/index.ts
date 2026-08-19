@@ -41,12 +41,12 @@ export default {
 
     // 一级命名空间 /img：通用图片代理
     if (url.pathname === IMG_BASE_PATH || url.pathname.startsWith(IMG_BASE_PATH + "/")) {
-      return handleImgRequest(request, env);
+      return handleImgRequest(request, env, ctx);
     }
 
     // 一级命名空间 /url：通用 URL 代理（与 /img 同构，任意 http(s) 资源）
     if (url.pathname === URL_BASE_PATH || url.pathname.startsWith(URL_BASE_PATH + "/")) {
-      return handleUrlRequest(request, env);
+      return handleUrlRequest(request, env, ctx);
     }
 
     // 一级命名空间 /doubanapi：豆瓣 API 反代（简化版，仅 JSON 无 body 改写）

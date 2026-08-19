@@ -74,4 +74,27 @@ describe("handleUrlRequest", () => {
     expect(target).toBeDefined();
     expect(target![1].headers).toMatchObject({ Referer: "https://douban.com/" });
   });
+
+  it("caches image responses but not api responses", async () => {
+    const mf = mockFetch(200, "img", { "Content-Type": "image/png" });
+    globalThis.fetch = mf as any;
+    const put = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("caches", { default: { match: vi.fn(async () => undefined), put } });
+    const ctx = { waitUntil: vi.fn((p: Promise<void>) => p.catch(() => {})) };
+
+    const imgReq = new Request(`https://proxy.laoz.org${URL_BASE_PATH}?url=${encodeURIComponent("https://example.com/a.png")}`);
+    const imgResp = await handleUrlRequest(imgReq, {} as any, ctx as any);
+    expect(imgResp.status).toBe(200);
+    expect(imgResp.headers.get("Cache-Control")).toBe(`public, max-age=604800`);
+    expect(put).toHaveBeenCalledTimes(1);
+
+    globalThis.fetch = mockFetch(200, '{"data":[]}', { "Content-Type": "application/json" });
+    const apiReq = new Request(`https://proxy.laoz.org${URL_BASE_PATH}?url=${encodeURIComponent("https://example.com/api")}`);
+    const apiResp = await handleUrlRequest(apiReq, {} as any, ctx as any);
+    expect(apiResp.status).toBe(200);
+    expect(apiResp.headers.get("Cache-Control")).toBe("no-store");
+    expect(put).toHaveBeenCalledTimes(1);
+
+    vi.unstubAllGlobals();
+  });
 });

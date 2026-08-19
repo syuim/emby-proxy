@@ -102,12 +102,12 @@ function error(msg: string, status = 400): Response {
   return new Response(msg, { status, headers: CORS_HEADERS });
 }
 
-export async function handleUrlRequest(request: Request, env: Env): Promise<Response> {
+export async function handleUrlRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   // /url 与 /img 同一实现，行为完全一致
-  return handleImgRequest(request, env);
+  return handleImgRequest(request, env, ctx);
 }
 
-export async function handleImgRequest(request: Request, env: Env): Promise<Response> {
+export async function handleImgRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -176,22 +176,27 @@ export async function handleImgRequest(request: Request, env: Env): Promise<Resp
     targetHeaders["Referer"] = referer;
   }
 
-  // 仅幂等 GET（且无自定义 body）可缓存：cacheEverything 让 CF 边缘缓存出网子请求，
-  // 命中即省回源；cacheTtlByStatus 只缓存 2xx，避免把 404/错误页缓存住。
+  // 仅幂等 GET（且无自定义 body）可缓存；只缓存图片内容（image/*），
+  // API/JSON 等响应每次回源，避免数据陈旧（如 RSSHub 走代理拉 API 被缓存 7 天）。
+  // Cache API 先查后写：命中直接返回，未命中回源后按 Content-Type 决定是否入缓存。
   const cacheable = targetMethod === "GET" && !targetBody;
-  const init: RequestInit & {
-    cf?: { cacheEverything: boolean; cacheTtlByStatus: Record<string, number> };
-  } = {
+  const cache = (globalThis as { caches?: CacheStorage }).caches;
+  const cacheKey = new Request(targetURL);
+  if (cacheable && cache) {
+    const cached = await cache.default.match(cacheKey);
+    if (cached) {
+      return new Response(cached.body, {
+        status: cached.status,
+        headers: buildRespHeaders(origin, cached, true),
+      });
+    }
+  }
+
+  const init: RequestInit = {
     method: targetMethod,
     body: targetBody || undefined,
     headers: targetHeaders,
   };
-  if (cacheable) {
-    init.cf = {
-      cacheEverything: true,
-      cacheTtlByStatus: { "200-299": IMAGE_CACHE_MAX_AGE, "300-599": 0 },
-    };
-  }
 
   let response: Response;
   try {
@@ -200,18 +205,27 @@ export async function handleImgRequest(request: Request, env: Env): Promise<Resp
     return error("Bad Gateway: fetch failed", 502);
   }
 
-  const cacheHit = cacheable && response.status >= 200 && response.status < 300;
-  const respHeaders: Record<string, string> = {
-    ...CORS_HEADERS,
-    "Access-Control-Allow-Origin": origin,
-    "Content-Type": response.headers.get("Content-Type") || "application/octet-stream",
-    "Cache-Control": cacheHit ? `public, max-age=${IMAGE_CACHE_MAX_AGE}` : "no-store",
-  };
-  // 响应回显请求 Origin，公共缓存需按 Origin 分桶，避免跨源命中导致 CORS 报错
-  if (cacheHit) respHeaders["Vary"] = "Origin";
+  const cacheHit = cacheable && response.ok && (response.headers.get("Content-Type") || "").startsWith("image/");
+  if (cacheHit && cache) {
+    ctx?.waitUntil(cache.default.put(cacheKey, response.clone()).catch(() => {}));
+  }
 
   return new Response(response.body, {
     status: response.status,
-    headers: respHeaders,
+    headers: buildRespHeaders(origin, response, cacheHit),
   });
+}
+
+function buildRespHeaders(origin: string, res: Response, cacheHit: boolean): Record<string, string> {
+  const headers: Record<string, string> = {
+    ...CORS_HEADERS,
+    "Access-Control-Allow-Origin": origin,
+    "Content-Type": res.headers.get("Content-Type") || "application/octet-stream",
+    "Cache-Control": cacheHit ? `public, max-age=${IMAGE_CACHE_MAX_AGE}` : "no-store",
+  };
+  // 响应回显请求 Origin，公共缓存需按 Origin 分桶，避免跨源命中导致 CORS 报错
+  if (cacheHit) {
+    headers["Vary"] = "Origin";
+  }
+  return headers;
 }
