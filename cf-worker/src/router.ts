@@ -1,5 +1,5 @@
-import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, IMG_BASE_PATH, SEMBY_BASE_PATH, SEMBY_ORIGIN } from "./constants";
-import { handleImgRequest } from "./imgproxy";
+import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, URL_BASE_PATH, SEMBY_BASE_PATH, SEMBY_ORIGIN } from "./constants";
+import { handleUrlRequest } from "./urlproxy";
 import { readEmbys, readNodes, writeEmbys } from "./storage";
 import { immediateProbe } from "./health";
 import type { EmbyRecord, Env, NodeRecord } from "./types";
@@ -276,24 +276,24 @@ const TMDB_API_ORIGIN = "https://api.themoviedb.org";
 // TMDB 图片域名：图片路径统一以 /t/p/<size>/<file> 开头（image.tmdb.org 固定结构）
 const TMDB_IMAGE_ORIGIN = "https://image.tmdb.org";
 
-// 识别 TMDB 图片路径：/t/p/... → 走 image.tmdb.org + /img 图片代理
-// （/img 提供 UA 伪装、Referer 规则与 CF 边缘缓存，见 imgproxy.ts）
+// 识别 TMDB 图片路径：/t/p/... → 走 image.tmdb.org + /url 通用代理
+// （/url 提供 UA 伪装、Referer 规则与图片边缘缓存，见 urlproxy.ts）
 export function isTmdbImageSubpath(subpath: string): boolean {
   return /^\/t\/p\//.test(subpath);
 }
 
-export async function handleTmdbRequest(request: Request, env: Env): Promise<Response> {
+export async function handleTmdbRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const subpath = url.pathname.slice(TMDB_BASE_PATH.length) || "/";
 
-  // 图片路径：转发到 TMDB 图片域名，并复用 /img 图片代理（UA 伪装 + Referer + 边缘缓存）
+  // 图片路径：转发到 TMDB 图片域名，并复用 /url 通用代理（UA 伪装 + Referer + 图片缓存）
   if (request.method === "GET" && isTmdbImageSubpath(subpath)) {
     const imgUrl = TMDB_IMAGE_ORIGIN + subpath + url.search;
-    const imgReq = new Request(`https://proxy.laoz.org${IMG_BASE_PATH}?url=${encodeURIComponent(imgUrl)}`, {
+    const imgReq = new Request(`https://proxy.laoz.org${URL_BASE_PATH}?url=${encodeURIComponent(imgUrl)}`, {
       method: "GET",
       headers: request.headers,
     });
-    return handleImgRequest(imgReq, env);
+    return handleUrlRequest(imgReq, env, ctx);
   }
 
   const target = TMDB_API_ORIGIN + subpath + url.search;

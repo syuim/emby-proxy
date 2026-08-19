@@ -1,6 +1,5 @@
-// /img 与 /url 通用代理：仅 GET ?url=...（固定 GET、不可自定义头/体，避免成为开放中继）
-// 无鉴权。UA 未指定时随机伪装浏览器；Referer 按外部规则表自动补齐（防盗链）。
-// /url 与 /img 行为完全一致（同一实现），用于代理图片外的任意 http(s) 资源。
+// /url 通用代理：代理任意 http(s) 资源（原 /img 已并入）
+// 无鉴权。UA 未指定时随机伪装浏览器；目标请求头（Referer/Origin 等）按规则自动补齐（防盗链/校验）。
 import { isPrivateHost } from "./router";
 import { IMAGE_CACHE_MAX_AGE } from "./constants";
 import type { Env } from "./types";
@@ -28,22 +27,24 @@ function randomUA(): string {
 const DEFAULT_REFERER_RULES_URL = "https://static.laoz.org/proxy/proxy_prefer.txt";
 const RULES_CACHE_TTL_MS = 3600 * 1000;
 
-interface RefererRule {
+interface TargetHeaderRule {
   pattern: RegExp;
-  referer: string;
+  headers: Record<string, string>;
 }
 
-const BUILTIN_RULES: RefererRule[] = [
-  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*sspai\.com(?:\/|$)/, referer: "https://sspai.com" },
-  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*indienova\.com(?:\/|$)/, referer: "https://indienova.com" },
+const BUILTIN_RULES: TargetHeaderRule[] = [
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*sspai\.com(?:\/|$)/, headers: { Referer: "https://sspai.com" } },
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*indienova\.com(?:\/|$)/, headers: { Referer: "https://indienova.com" } },
   // 豆瓣图片防盗链：img*.doubanio.com 无 Referer 返回 418，douban.com 域内 Referer 均可
-  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*doubanio\.com(?:\/|$)/, referer: "https://douban.com/" },
-  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*douban\.com(?:\/|$)/, referer: "https://douban.com/" },
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*doubanio\.com(?:\/|$)/, headers: { Referer: "https://douban.com/" } },
+  { pattern: /^https:\/\/(?:[a-z0-9-]+\.)*douban\.com(?:\/|$)/, headers: { Referer: "https://douban.com/" } },
+  // GoFans API 无 Origin 头返回 401 Unauthorized
+  { pattern: /^https:\/\/api\.gofans\.cn(?:\/|$)/, headers: { Origin: "https://gofans.cn" } },
 ];
 
-let rulesCache: { rules: RefererRule[]; expiry: number } = { rules: [], expiry: 0 };
+let rulesCache: { rules: TargetHeaderRule[]; expiry: number } = { rules: [], expiry: 0 };
 
-async function loadRefererRules(env: Env): Promise<RefererRule[]> {
+async function loadTargetHeaderRules(env: Env): Promise<TargetHeaderRule[]> {
   const now = Date.now();
   if (rulesCache.rules.length > 0 && now < rulesCache.expiry) {
     return rulesCache.rules;
@@ -58,10 +59,10 @@ async function loadRefererRules(env: Env): Promise<RefererRule[]> {
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line && line.startsWith("https://"))
-        .flatMap((line): RefererRule[] => {
+        .flatMap((line): TargetHeaderRule[] => {
           try {
             const hostname = new URL(line).hostname.replace(/\./g, "\\.");
-            return [{ pattern: new RegExp(`^https://(?:[a-z0-9-]+\\.)*${hostname}(?:/|$)`), referer: line }];
+            return [{ pattern: new RegExp(`^https://(?:[a-z0-9-]+\\.)*${hostname}(?:/|$)`), headers: { Referer: line } }];
           } catch {
             return [];
           }
@@ -70,7 +71,7 @@ async function loadRefererRules(env: Env): Promise<RefererRule[]> {
       return [];
     }
   })();
-  // 内置规则始终生效（豆瓣防盗链），外部文件作增量，同 host 去重
+  // 内置规则始终生效（豆瓣防盗链等），外部文件作增量，同 host 去重
   const merged = [...BUILTIN_RULES];
   for (const rule of externalRules) {
     if (!merged.some((b) => b.pattern.source === rule.pattern.source)) {
@@ -81,12 +82,18 @@ async function loadRefererRules(env: Env): Promise<RefererRule[]> {
   return rulesCache.rules;
 }
 
-async function getReferer(url: string, env: Env): Promise<string> {
-  const rules = await loadRefererRules(env);
+// 按目标 URL 补齐请求头，不覆盖调用方显式传入的同名头
+async function applyTargetHeaders(targetURL: string, targetHeaders: Record<string, string>, env: Env): Promise<void> {
+  const rules = await loadTargetHeaderRules(env);
   for (const rule of rules) {
-    if (rule.pattern.test(url)) return rule.referer;
+    if (rule.pattern.test(targetURL)) {
+      for (const [name, value] of Object.entries(rule.headers)) {
+        if (!targetHeaders[name]) {
+          targetHeaders[name] = value;
+        }
+      }
+    }
   }
-  return "";
 }
 
 const CORS_HEADERS = {
@@ -103,11 +110,6 @@ function error(msg: string, status = 400): Response {
 }
 
 export async function handleUrlRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
-  // /url 与 /img 同一实现，行为完全一致
-  return handleImgRequest(request, env, ctx);
-}
-
-export async function handleImgRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -171,10 +173,7 @@ export async function handleImgRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (!targetHeaders["User-Agent"]) targetHeaders["User-Agent"] = randomUA();
-  const referer = await getReferer(targetURL, env);
-  if (referer && !targetHeaders["Referer"]) {
-    targetHeaders["Referer"] = referer;
-  }
+  await applyTargetHeaders(targetURL, targetHeaders, env);
 
   // 仅幂等 GET（且无自定义 body）可缓存；只缓存图片内容（image/*），
   // API/JSON 等响应每次回源，避免数据陈旧（如 RSSHub 走代理拉 API 被缓存 7 天）。

@@ -71,16 +71,15 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 - `/emby/<name>/path`：名称访问，走节点选择
 - `/emby/http(s)://...`：地址访问（原样或 URL 编码），必走本地代理，无鉴权
 - `/emby/admin`：管理 UI / API
-- `/tmdb/...`：TMDB 反代（一级命名空间，逻辑同原 `/emby/tmdb`）。GET 且路径以 `/t/p/` 开头（TMDB 图片固定结构）时转发到 `image.tmdb.org` 并复用 `/img` 图片代理（UA 伪装 + Referer 规则 + CF 边缘缓存），其余路径转发到 `api.themoviedb.org`
-- `/img`：通用图片代理，无鉴权
-- `/url`：通用 URL 代理，无鉴权（与 `/img` 同一实现 `handleUrlRequest`，行为完全一致，可代理任意 http(s) 资源，非仅图片）
+- `/tmdb/...`：TMDB 反代（一级命名空间，逻辑同原 `/emby/tmdb`）。GET 且路径以 `/t/p/` 开头（TMDB 图片固定结构）时转发到 `image.tmdb.org` 并复用 `/url` 通用代理（UA 伪装 + 目标头规则 + 图片缓存），其余路径转发到 `api.themoviedb.org`
+- `/url`：通用 URL 代理，无鉴权（原 `/img` 已并入，`urlproxy.ts` 单一实现），可代理任意 http(s) 资源。仅 `image/*` 且 2xx 响应走 Cache API 缓存（7 天），API/JSON 每次回源并返回 `no-store`；目标请求头（Referer/Origin 等）按内置规则 + 外部 Referer 规则文件自动补齐（防盗链/鉴权，如 gofans API 需注入 `Origin: https://gofans.cn`）
 - `/douban/...`：豆瓣 Stremio addon 反代（`http://rn.127315.xyz:31001` 直连，不依赖 fw-douban.laoz.org），无鉴权。UA 透传保留 forward 行为；注入 `X-Forwarded-Host/Proto` 使 addon 生成的 origin 绝对 URL（保存配置返回的 `manifestUrl`）指向 Worker（线上实测 `X-Forwarded-Proto` 未生效，addon 退回 http scheme，改写需兜底 http/https 双变体）；图片 URL 由 addon 直出 `https://proxy.laoz.org/url?url=...`（不经 addon 节点），`rewriteDoubanBody` 对 `/url` 前缀做占位保护、**不**加 `/douban` 前缀，避免代理断裂；响应文本统一前缀改写保证闭环：JSON 绝对 URL（`/url` 图片链接除外）、HTML root-relative 链接（form action / assets / icon，200 与 401 登录失败页均改写）、JS `fetch("/configure")` 路径；`history.replaceState` 的 `/${configId}/configure` 模板**不**改写（configId 提取自改写后 manifestUrl 第一段，加前缀会变 `/douban/douban/configure`；不改写则地址栏落在 `/douban/configure`，刷新 302 回默认配置页）。仅 `/assets/` 走 CF 边缘缓存，catalog 等 JSON 不缓存（UA 不进 cache key，forward UA 的 `tmdb:` ID 响应会污染普通缓存）
 - `/doubanapi/...`：豆瓣简化版 API 反代（`http://rn.127315.xyz:4000`，与 addon 同机不同容器），仅 JSON catalog 无 body 改写，无鉴权
 - 根路径 `/` 302 到 `/emby/admin`；`/__health` 保留在顶层；其余一级路径 404
 
 节点协议路径不含 `/emby` 前缀：307 到节点仍是 `/<name>/subpath`。只有两种访问形式：名称访问 `/emby/<name>/path` 走节点选择（local 亦在其中），地址访问 `/emby/http(s)://...`（原样或 URL 编码）必走本地代理；不存在 `/emby/<name>/<url>` 形式。
 
-地址访问原样形式会自动注册 emby，`node_id`/`home_node_id` 固定为 `local`，只写 emby 记录、不 bump version、不 fan-out 推节点（否则 cron 会误判补推）；编码形式是本地代理改写的回流产物，不触发注册。URL 自带 query（CDN 签名）与外层 query 会合并。地址访问与图片代理均无鉴权，等同 open proxy，依赖域名不公开。
+地址访问原样形式会自动注册 emby，`node_id`/`home_node_id` 固定为 `local`，只写 emby 记录、不 bump version、不 fan-out 推节点（否则 cron 会误判补推）；编码形式是本地代理改写的回流产物，不触发注册。URL 自带 query（CDN 签名）与外层 query 会合并。地址访问与通用代理均无鉴权，等同 open proxy，依赖域名不公开。
 
 ## Failover Behavior
 
@@ -108,9 +107,9 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 ### cf-worker（wrangler secrets）
 
-`ADMIN_TOKEN`（管理 UI 登录）、`EMBY_SYNC_TOKEN`（推节点用）。可选环境变量 `REFERER_RULES_URL`（`/img` 图片代理的外部 Referer 规则 txt，默认 `https://static.laoz.org/proxy/proxy_prefer.txt`）。
+`ADMIN_TOKEN`（管理 UI 登录）、`EMBY_SYNC_TOKEN`（推节点用）。可选环境变量 `REFERER_RULES_URL`（`/url` 通用代理的外部 Referer 规则 txt，默认 `https://static.laoz.org/proxy/proxy_prefer.txt`）。
 
-- 地址访问（`/emby/http(s)://...`）与图片代理（`/img`）均无鉴权（token 已移除），等同 open proxy，依赖 Worker 域名不公开；私网/保留地址会被 `isPrivateHost` 拦截（403）。
+- 地址访问（`/emby/http(s)://...`）与通用代理（`/url`）均无鉴权（token 已移除），等同 open proxy，依赖 Worker 域名不公开；私网/保留地址会被 `isPrivateHost` 拦截（403）。
 - `EMBY_SYNC_TOKEN` 在 cf-worker 与所有节点上必须 byte-for-byte 一致，不一致 → 节点 401。
 - 不要在 CF 面板加 Plaintext Variables：`wrangler deploy` 会用 `wrangler.toml` 中 `[vars]` 段覆盖明文变量（toml 没声明 = 部署后清空）。所有 token 走 `wrangler secret put`。
 - `wrangler.toml` 已锁定 `account_id`（Suyu 账号）与 `name = "emby-proxy"`，不要改。
@@ -133,7 +132,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 1. **CF Worker**：`cd cf-worker && npx wrangler deployments list | head -20` → 确认最新 deployment 时间与本次推送吻合。
 2. **Go 节点**：`curl -s http://<host>:8080/__health` → 确认返回 `{"ok":true,...}`；`docker logs --tail 5 <container>` → 确认无启动错误。
-3. **地址访问 / 图片代理**：`curl -s -o /dev/null -w "%{http_code}" https://<worker>/emby/https://example.com/` → 返回后端状态码（本地代理回传，如 `200`）；`curl -s -o /dev/null -w "%{http_code}" "https://<worker>/img?url=https://httpbingo.org/image/png"` → `200`。
+3. **地址访问 / 通用代理**：`curl -s -o /dev/null -w "%{http_code}" https://<worker>/emby/https://example.com/` → 返回后端状态码（本地代理回传，如 `200`）；`curl -s -o /dev/null -w "%{http_code}" "https://<worker>/url?url=https://httpbingo.org/image/png"` → `200`。
 4. **面板验证**：`https://<worker>/emby/admin` → 节点列表应有“默认”标记，新增 emby 记录。
 
 ## Image Cache

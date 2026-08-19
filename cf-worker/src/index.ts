@@ -1,7 +1,7 @@
 import { routeAdmin } from "./admin";
-import { EMBY_BASE_PATH, IMG_BASE_PATH, URL_BASE_PATH, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, TMDB_BASE_PATH, SEMBY_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, URL_BASE_PATH, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, TMDB_BASE_PATH, SEMBY_BASE_PATH } from "./constants";
 import { runHealthCycle } from "./health";
-import { handleImgRequest, handleUrlRequest } from "./imgproxy";
+import { handleUrlRequest } from "./urlproxy";
 import { handleClientRequest, handleDirectRequest, handleDoubanRequest, handleDoubanApiRequest, handleTmdbRequest, handleSembyRequest } from "./router";
 import type { Env } from "./types";
 
@@ -21,7 +21,7 @@ export default {
 
     // 一级命名空间 /tmdb：TMDB 反代（提到最前，逻辑不变）
     if (url.pathname === TMDB_BASE_PATH || url.pathname.startsWith(TMDB_BASE_PATH + "/")) {
-      return handleTmdbRequest(request, env);
+      return handleTmdbRequest(request, env, ctx);
     }
 
     // 一级命名空间 /emby：admin、地址访问、名称访问
@@ -39,12 +39,7 @@ export default {
       return handleClientRequest(request, env, ctx);
     }
 
-    // 一级命名空间 /img：通用图片代理
-    if (url.pathname === IMG_BASE_PATH || url.pathname.startsWith(IMG_BASE_PATH + "/")) {
-      return handleImgRequest(request, env, ctx);
-    }
-
-    // 一级命名空间 /url：通用 URL 代理（与 /img 同构，任意 http(s) 资源）
+    // 一级命名空间 /url：通用 URL 代理（任意 http(s) 资源，图片/API 均可）
     if (url.pathname === URL_BASE_PATH || url.pathname.startsWith(URL_BASE_PATH + "/")) {
       return handleUrlRequest(request, env, ctx);
     }

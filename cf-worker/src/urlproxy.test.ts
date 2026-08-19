@@ -1,9 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { handleUrlRequest, handleImgRequest } from "./imgproxy";
+import { handleUrlRequest } from "./urlproxy";
 import { URL_BASE_PATH } from "./constants";
-
-// /url 与 /img 共用同一实现（handleUrlRequest → handleImgRequest），
-// 此处验证 /url 入口的通用 URL 代理行为与 /img 一致。
 
 const origFetch = globalThis.fetch;
 afterEach(() => {
@@ -48,17 +45,6 @@ describe("handleUrlRequest", () => {
     expect(resp.status).toBe(400);
   });
 
-  it("handles /url and /img identically", async () => {
-    const mf = mockFetch(200, "x");
-    globalThis.fetch = mf as any;
-
-    const reqUrl = new Request(`https://proxy.laoz.org${URL_BASE_PATH}?url=${encodeURIComponent("https://api.example.com/")}`);
-    const reqImg = new Request(`https://proxy.laoz.org/img?url=${encodeURIComponent("https://api.example.com/")}`);
-    const [r1, r2] = await Promise.all([handleUrlRequest(reqUrl, {} as any), handleImgRequest(reqImg, {} as any)]);
-    expect(r1.status).toBe(r2.status);
-    expect(await r1.text()).toBe(await r2.text());
-  });
-
   it("sends douban.com referer for doubanio image targets", async () => {
     const mf = mockFetch(200, "img");
     globalThis.fetch = mf as any;
@@ -73,6 +59,22 @@ describe("handleUrlRequest", () => {
     const target = calls.find((c) => String(c[0]).includes("img9.doubanio.com"));
     expect(target).toBeDefined();
     expect(target![1].headers).toMatchObject({ Referer: "https://douban.com/" });
+  });
+
+  it("injects gofans origin header", async () => {
+    const mf = mockFetch(200, '{"data":[]}', { "Content-Type": "application/json" });
+    globalThis.fetch = mf as any;
+
+    const req = new Request(
+      `https://proxy.laoz.org${URL_BASE_PATH}?url=${encodeURIComponent("https://api.gofans.cn/v1/web/app_records?limit=5")}`,
+    );
+    const resp = await handleUrlRequest(req, {} as any);
+    expect(resp.status).toBe(200);
+
+    const calls = mf.mock.calls.map((c) => c as unknown as [string, RequestInit]);
+    const target = calls.find((c) => String(c[0]).includes("api.gofans.cn"));
+    expect(target).toBeDefined();
+    expect(target![1].headers).toMatchObject({ Origin: "https://gofans.cn" });
   });
 
   it("caches image responses but not api responses", async () => {

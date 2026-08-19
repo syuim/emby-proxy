@@ -15,9 +15,7 @@ export const EMBY_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 
 // 一级功能命名空间：emby 功能挂在 /emby/<name>/... 与 /emby/<url> 下
 export const EMBY_BASE_PATH = "/emby";
-// 一级功能命名空间：通用图片代理 /img?url=...
-export const IMG_BASE_PATH = "/img";
-// 一级功能命名空间：通用 URL 代理 /url?url=...（与 /img 同构，非图片资源也可代理）
+// 一级功能命名空间：通用 URL 代理 /url?url=...（任意 http(s) 资源，图片/API 均可）
 export const URL_BASE_PATH = "/url";
 // 一级功能命名空间：豆瓣 addon 反代 /douban/...
 export const DOUBAN_BASE_PATH = "/douban";
