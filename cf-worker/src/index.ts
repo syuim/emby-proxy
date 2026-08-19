@@ -1,8 +1,8 @@
 import { routeAdmin } from "./admin";
-import { EMBY_BASE_PATH, IMG_BASE_PATH, URL_BASE_PATH, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, TMDB_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, IMG_BASE_PATH, URL_BASE_PATH, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, TMDB_BASE_PATH, SEMBY_BASE_PATH } from "./constants";
 import { runHealthCycle } from "./health";
 import { handleImgRequest, handleUrlRequest } from "./imgproxy";
-import { handleClientRequest, handleDirectRequest, handleDoubanRequest, handleDoubanApiRequest, handleTmdbRequest } from "./router";
+import { handleClientRequest, handleDirectRequest, handleDoubanRequest, handleDoubanApiRequest, handleTmdbRequest, handleSembyRequest } from "./router";
 import type { Env } from "./types";
 
 export default {
@@ -57,6 +57,11 @@ export default {
     // 一级命名空间 /douban：豆瓣 addon 反代
     if (url.pathname === DOUBAN_BASE_PATH || url.pathname.startsWith(DOUBAN_BASE_PATH + "/")) {
       return handleDoubanRequest(request, ctx);
+    }
+
+    // 一级命名空间 /semby：Semby 聚合代理（直连 RN:8096）
+    if (url.pathname === SEMBY_BASE_PATH || url.pathname.startsWith(SEMBY_BASE_PATH + "/")) {
+      return handleSembyRequest(request);
     }
 
     return new Response("Not Found", {

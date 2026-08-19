@@ -1,4 +1,4 @@
-import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, IMG_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, IMG_BASE_PATH, SEMBY_BASE_PATH, SEMBY_ORIGIN } from "./constants";
 import { handleImgRequest } from "./imgproxy";
 import { readEmbys, readNodes, writeEmbys } from "./storage";
 import { immediateProbe } from "./health";
@@ -859,5 +859,29 @@ function notFound(reason: string): Response {
   return new Response(`Not Found: ${reason}`, {
     status: 404,
     headers: { "Cache-Control": "no-store" },
+  });
+}
+
+/** /semby 子路径：直连 RN 上的 Semby 聚合代理 */
+export async function handleSembyRequest(request: Request): Promise<Response> {
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Max-Age": "86400",
+      },
+    });
+  }
+  const url = new URL(request.url);
+  const subpath = url.pathname.slice(SEMBY_BASE_PATH.length) || "/";
+  const target = SEMBY_ORIGIN + subpath + url.search;
+  return fetch(target, {
+    method: request.method,
+    headers: request.headers,
+    redirect: "manual",
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
   });
 }
