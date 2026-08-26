@@ -9,6 +9,7 @@ import {
 } from "./constants";
 import {
   emptyNodeHealth,
+  readConfigMeta,
   readEmbys,
   readHealth,
   readNodes,
@@ -98,10 +99,10 @@ export async function runHealthCycle(
     ).bind(...staleIds).run();
   }
 
-  // 恢复机制：home 连续两个周期健康（冷却期，防 flapping 反复切）→ 切回；
-  // 兜底直连的 emby 在 home 未恢复但有其他健康节点时，先转移到该节点。
+  // 恢复机制：home（sort_order 第一个）连续两个周期健康（冷却期，防 flapping 反复切）→ 切回；
+  // 降级兜底（active_node_id 为 '' 或 'local'）时，home 未恢复但有其他健康节点则先转移过去。
   // force=true（手动立即探测）时跳过冷却，只要有健康即切回。
-  ctx.waitUntil(restoreRecoveredEmbys(env, embysKV, nodesKV, prevHealth, newHealth, force));
+  ctx.waitUntil(restoreRecoveredEmbys(env, nodesKV, prevHealth, newHealth, force));
 
   // 补齐：节点 applied_version 与 KV embys.version 不一致（或未知）时异步补推
   ctx.waitUntil(
@@ -110,14 +111,13 @@ export async function runHealthCycle(
 }
 
 /**
- * 故障恢复切回：emby 的 node_id 因故障转移偏离 home_node_id（可能经过多次转移
- * 或兜底降级为直连 '' / Worker 代理 'local'），home 连续两个探活周期健康（冷却期）才切回，
+ * 故障恢复切回：全局 active_node_id 因故障转移偏离 home（sort_order 第一个节点）
+ * 或降级为 ''/local，home 连续两个探活周期健康（冷却期）才切回，
  * 防止 flapping 节点被反复 failback/failover 来回切。
- * home 本周期就不健康、且兜底降级的 emby，若有其他健康节点则按排序转移过去。
+ * 降级兜底期间，home 未恢复但有其他健康节点则按序转移过去。
  */
 async function restoreRecoveredEmbys(
   env: Env,
-  embysKV: EmbysKV,
   nodesKV: NodesKV,
   prevHealth: HealthKV,
   health: HealthKV,
@@ -131,40 +131,27 @@ async function restoreRecoveredEmbys(
     force ||
     (health.nodes[id]?.healthy === true && prevHealth.nodes[id]?.healthy === true);
 
-  const recoveredHomeIds = new Set(
-    embysKV.embys
-      .filter(
-        (e) =>
-          e.home_node_id &&
-          e.node_id !== e.home_node_id &&
-          stablyHealthy(e.home_node_id),
-      )
-      .map((e) => e.home_node_id),
-  );
-  for (const id of recoveredHomeIds) {
+  const config = await readConfigMeta(env);
+  const homeId = nodesKV.nodes[0]?.id; // sort_order 第一个节点
+
+  if (!homeId) return;
+
+  // --- Failback ---
+  // active_node_id != home，且 home 稳定健康 → 切换回 home
+  if (config.active_node_id !== homeId && stablyHealthy(homeId)) {
     stmts.push(
       env.EMBY_DB.prepare(
-        "UPDATE embys SET node_id = home_node_id WHERE home_node_id = ? AND node_id != home_node_id",
-      ).bind(id),
+        "UPDATE config_meta SET active_node_id = ? WHERE id = 1",
+      ).bind(homeId),
     );
-    logs.push(`failback->${id}`);
+    logs.push(`failback->${homeId}`);
   }
 
-  // 兜底救援：node_id 为 ''（曾全灭降级直连）或 'local'（曾全灭降级 Worker 代理）
-  // 且 home 本周期仍不健康 → 按排序从 home 位置往下挑第一个健康节点转移。
-  // home 已健康但冷却未满的不动，等下周期切回
-  const strandedHomeIds = new Set(
-    embysKV.embys
-      .filter(
-        (e) =>
-          (e.node_id === "" || e.node_id === LOCAL_NODE_ID) &&
-          e.home_node_id &&
-          !health.nodes[e.home_node_id]?.healthy &&
-          nodesKV.nodes.some((n) => n.id === e.home_node_id),
-      )
-      .map((e) => e.home_node_id),
-  );
-  for (const homeId of strandedHomeIds) {
+  // --- Rescue ---
+  // active_node_id 降级为 ''（直连）或 'local'（Worker 代理），
+  // 且 home 本周期不健康，但有其他健康节点 → 按序转移
+  const isDegraded = config.active_node_id === "" || config.active_node_id === LOCAL_NODE_ID;
+  if (isDegraded && !health.nodes[homeId]?.healthy) {
     const startIdx = nodesKV.nodes.findIndex((n) => n.id === homeId);
     let pick: string | null = null;
     for (let i = 1; i <= nodesKV.nodes.length; i++) {
@@ -177,10 +164,10 @@ async function restoreRecoveredEmbys(
     if (pick) {
       stmts.push(
         env.EMBY_DB.prepare(
-          `UPDATE embys SET node_id = ? WHERE home_node_id = ? AND node_id IN ('', '${LOCAL_NODE_ID}')`,
-        ).bind(pick, homeId),
+          "UPDATE config_meta SET active_node_id = ? WHERE id = 1",
+        ).bind(pick),
       );
-      logs.push(`rescue degraded(home=${homeId})->${pick}`);
+      logs.push(`rescue degraded->${pick}`);
     }
   }
 

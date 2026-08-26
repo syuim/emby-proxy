@@ -46,6 +46,12 @@ export interface SyncSnapshot {
   proxies: { path_prefix: string; backend_url: string }[];
 }
 
+export interface ConfigMeta {
+  proxy_mode: 'node' | 'local' | 'direct';
+  active_node_id: string;
+  version: number;
+}
+
 export interface PushResult {
   node_id: string;
   status: "ok" | "error";

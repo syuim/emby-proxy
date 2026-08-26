@@ -1,4 +1,5 @@
 import type {
+  ConfigMeta,
   EmbysKV,
   Env,
   HealthKV,
@@ -31,6 +32,20 @@ export async function readNodes(env: Env): Promise<NodesKV> {
       created_at: r.created_at,
       sort_order: r.sort_order ?? 0,
     })),
+  };
+}
+
+export async function readConfigMeta(env: Env): Promise<ConfigMeta> {
+  const res = await env.EMBY_DB.prepare(
+    "SELECT version, proxy_mode, active_node_id FROM config_meta WHERE id = 1",
+  ).first<{ version: number; proxy_mode: string; active_node_id: string }>();
+  if (!res) {
+    return { proxy_mode: "node", active_node_id: "", version: 0 };
+  }
+  return {
+    proxy_mode: (res.proxy_mode as ConfigMeta["proxy_mode"]) || "node",
+    active_node_id: res.active_node_id ?? "",
+    version: res.version,
   };
 }
 

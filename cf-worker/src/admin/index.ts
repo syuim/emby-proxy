@@ -4,15 +4,16 @@ import { buildLoginCookie, buildLogoutCookie, checkAdminAuth, createSession, des
 import {
   handleAddEmby,
   handleAddNode,
-  handleBatchUpdateEmbys,
   handleDeleteEmby,
   handleDeleteNode,
+  handleGetConfig,
   handleHealth,
   handleListEmbys,
   handleListNodes,
   handleManualSync,
   handleProbe,
   handleReorderNodes,
+  handleUpdateConfig,
   handleUpdateEmby,
   handleUpdateNode,
 } from "./handlers";
@@ -68,7 +69,6 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
   if (path === "/admin/api/embys") {
     if (method === "GET") return handleListEmbys(env);
     if (method === "POST") return wrapJson(request, (req) => handleAddEmby(req, env));
-    if (method === "PUT") return wrapJson(request, (req) => handleBatchUpdateEmbys(req, env));
   }
   const embyMatch = path.match(/^\/admin\/api\/embys\/([^/]+)$/);
   if (embyMatch) {
@@ -76,6 +76,12 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
     if (method === "PUT")
       return wrapJson(request, (req) => handleUpdateEmby(req, env, name));
     if (method === "DELETE") return handleDeleteEmby(env, name);
+  }
+
+  // 全局代理模式
+  if (path === "/admin/api/config") {
+    if (method === "GET") return handleGetConfig(env);
+    if (method === "PUT") return wrapJson(request, (req) => handleUpdateConfig(req, env));
   }
 
   // Health & manual sync & probe

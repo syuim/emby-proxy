@@ -396,6 +396,16 @@
       /* ============ Tabs row (tabs + add button) ============ */
       .tabs-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
       .tabs-row .tabs { margin-bottom: 0; }
+      .mode-selector { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+      .mode-label { font-size: 12px; color: var(--color-text-dim); }
+      .mode-selector select {
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--color-border-strong);
+        background: var(--color-surface);
+        color: var(--color-text);
+        font-size: 13px;
+      }
 
       /* ============ Modal ============ */
       .modal-overlay {
@@ -564,7 +574,7 @@
     <div id="modal-root"></div>
     <script>
       const $app = document.getElementById("app");
-      const state = { tab: localStorage.getItem("emby-router-tab") === "nodes" ? "nodes" : "embys", nodes: [], embys: [], health: {}, theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0 };
+      const state = { tab: localStorage.getItem("emby-router-tab") === "nodes" ? "nodes" : "embys", nodes: [], embys: [], health: {}, proxyMode: "node", activeNodeId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0 };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -625,14 +635,17 @@
         catch { return false; }
       }
       async function refreshAll() {
-        const [n, e, h] = await Promise.all([
+        const [n, e, h, c] = await Promise.all([
           api("/emby/admin/api/nodes"),
           api("/emby/admin/api/embys"),
           api("/emby/admin/api/health"),
+          api("/emby/admin/api/config"),
         ]);
         state.nodes = n.nodes || [];
         state.embys = e.embys || [];
         state.health = h.nodes || {};
+        state.proxyMode = c.proxy_mode || "node";
+        state.activeNodeId = c.active_node_id || "";
         render();
       }
       function nodeName(id) {
@@ -640,11 +653,6 @@
         if (id === "local") return "本地代理（Worker）";
         const n = state.nodes.find((x) => x.id === id);
         return n ? n.name : id;
-      }
-      function nodeLabel(id) {
-        if (!id) return '直连<span class="hide-sm">（无代理）</span>';
-        if (id === "local") return '本地代理<span class="hide-sm">（Worker）</span>';
-        return escapeHtml(nodeName(id));
       }
       function healthBadge(nodeId) {
         if (nodeId === "local") return '<span class="badge ok">本地</span>';
@@ -693,8 +701,9 @@
           }
           let badCount = 0;
           const lines = state.embys.map((e) => {
-            if (!e.node_id) return `· ${e.name}：直连（不经节点）`;
-            const ms = (h.nodes?.[e.node_id]?.backend_latencies || {})[e.name];
+            if (state.proxyMode === "direct") return `· ${e.name}：直连（不经代理）`;
+            if (state.proxyMode === "local" || !state.activeNodeId) return `· ${e.name}：Worker 代理`;
+            const ms = (h.nodes?.[state.activeNodeId]?.backend_latencies || {})[e.name];
             if (ms == null || ms < 0) {
               badCount++;
               return `· ${e.name}：不可达`;
@@ -750,6 +759,14 @@
                 <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
                 <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
               </div>
+              <div class="mode-selector" title="全局代理模式">
+                <label class="mode-label">模式</label>
+                <select id="proxy-mode-select">
+                  <option value="node" ${state.proxyMode === "node" ? "selected" : ""}>Node 代理</option>
+                  <option value="local" ${state.proxyMode === "local" ? "selected" : ""}>Worker 代理</option>
+                  <option value="direct" ${state.proxyMode === "direct" ? "selected" : ""}>直连</option>
+                </select>
+              </div>
               <button class="btn btn-primary" id="btn-add">${state.tab === "embys" ? "+ Emby" : "+ 节点"}</button>
             </div>
             <div id="tab-content"></div>
@@ -765,6 +782,23 @@
         $app.querySelectorAll(".tabs button").forEach((b) => {
           b.onclick = () => { state.tab = b.dataset.tab; localStorage.setItem("emby-router-tab", state.tab); render(); };
         });
+        const modeSelect = $app.querySelector("#proxy-mode-select");
+        if (modeSelect) {
+          modeSelect.onchange = async () => {
+            const newMode = modeSelect.value;
+            try {
+              await api("/emby/admin/api/config", {
+                method: "PUT",
+                body: JSON.stringify({ proxy_mode: newMode }),
+              });
+              state.proxyMode = newMode;
+              toast(`已切换为 ${modeSelect.options[modeSelect.selectedIndex].text}`, "ok");
+            } catch (e) {
+              toast(e.message, "err");
+              modeSelect.value = state.proxyMode;
+            }
+          };
+        }
         $app.querySelector("#btn-add").onclick = () => {
           if (state.tab === "embys") openAddEmbyModal();
           else openAddNodeModal();
@@ -802,12 +836,6 @@
       // ---------- Embys ----------
       function renderEmbys() {
         const c = $app.querySelector("#tab-content");
-        // 直连的真实值是 ""，没法同时当占位符，故用 __unset 哨兵值避免误选中直连
-        const batchOptionsHtml =
-          '<option value="__unset" selected>请选择节点…</option>' +
-          '<option value="">直连（无代理）</option>' +
-          '<option value="local">本地代理（Worker）</option>' +
-          state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
         const pageSize = 15;
         const totalPages = Math.max(1, Math.ceil(state.embys.length / pageSize));
         state.embyPage = Math.min(state.embyPage, totalPages - 1);
@@ -819,18 +847,12 @@
             <div class="toolbar">
               <h2>Emby 列表</h2>
               <button class="btn btn-ghost" id="e-probe">⟳ 探测</button>
-              <div id="batch-toolbar" class="actions" style="display:none;">
-                <span class="hint" id="batch-count">已选 0 项</span>
-                <select id="batch-node" style="width:auto;">${batchOptionsHtml}</select>
-                <button class="btn btn-primary" id="btn-batch" disabled>批量调整节点</button>
-              </div>
             </div>
             ${state.embys.length === 0
               ? '<div class="empty"><div class="empty-icon">📭</div>还没有 emby 配置</div>'
               : `<div class="table-wrap table-wrap-embys ${state.editingEmby ? "editing" : ""}"><table>
                   <thead><tr>
-                    <th style="width:36px;"><input type="checkbox" id="select-all" /></th>
-                    <th>名称</th><th>后端</th><th>节点</th><th>状态</th><th class="col-actions">操作</th>
+                    <th>名称</th><th>后端</th><th class="col-actions">操作</th>
                   </tr></thead>
                   <tbody>
                     ${paged.map((e) => {
@@ -838,17 +860,8 @@
                       if (editing) {
                         return `
                           <tr data-name="${escapeHtml(e.name)}" data-mode="edit">
-                            <td></td>
                             <td><input class="row-name" value="${escapeHtml(e.name)}" /></td>
                             <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
-                            <td>
-                              <select class="row-node">
-                                <option value="">直连（无代理）</option>
-                                <option value="local" ${e.node_id === "local" ? "selected" : ""}>本地代理（Worker）</option>
-                                ${state.nodes.map((n) => `<option value="${escapeHtml(n.id)}" ${n.id === e.node_id ? "selected" : ""}>${escapeHtml(n.name)}</option>`).join("")}
-                              </select>
-                            </td>
-                            <td>${healthBadge(e.node_id)}</td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
                               <button class="btn btn-ghost" data-act="cancel">取消</button>
@@ -858,11 +871,8 @@
                       }
                       return `
                         <tr data-name="${escapeHtml(e.name)}" data-mode="view">
-                          <td><input type="checkbox" class="row-select" data-name="${escapeHtml(e.name)}" /></td>
                           <td><strong>${escapeHtml(e.name)}</strong></td>
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
-                          <td>${nodeLabel(e.node_id)}</td>
-                          <td>${healthBadge(e.node_id)}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
                             <button class="btn btn-danger" data-act="del">删除</button>
@@ -906,16 +916,14 @@
             };
           } else {
             const $backend = tr.querySelector(".row-backend");
-            const $node = tr.querySelector(".row-node");
             tr.querySelector('[data-act="save"]').onclick = async () => {
               const newName = tr.querySelector(".row-name").value.trim();
               const newBackend = $backend.value.trim();
-              const newNode = $node.value;
               if (!newBackend) { toast("backend_url 不能为空", "err"); return; }
               try {
                 await api("/emby/admin/api/embys/" + encodeURIComponent(name), {
                   method: "PUT",
-                  body: JSON.stringify({ name: newName, backend_url: newBackend, node_id: newNode }),
+                  body: JSON.stringify({ name: newName, backend_url: newBackend }),
                 });
                 toast(`已保存并推送：${newName}`, "ok");
                 state.editingEmby = null;
@@ -928,62 +936,6 @@
             };
           }
         });
-
-        // ---------- 多选批量调整 ----------
-        function updateBatchToolbar() {
-          const checked = c.querySelectorAll(".row-select:checked");
-          const toolbar = c.querySelector("#batch-toolbar");
-          const count = c.querySelector("#batch-count");
-          if (checked.length === 0) {
-            toolbar.style.display = "none";
-          } else {
-            toolbar.style.display = "flex";
-            count.textContent = `已选 ${checked.length} 项`;
-          }
-        }
-
-        const selectAll = c.querySelector("#select-all");
-        if (selectAll) {
-          selectAll.onclick = () => {
-            const checked = selectAll.checked;
-            c.querySelectorAll(".row-select").forEach(cb => cb.checked = checked);
-            updateBatchToolbar();
-          };
-        }
-
-        c.querySelectorAll(".row-select").forEach(cb => {
-          cb.onclick = () => {
-            if (selectAll) selectAll.checked = false;
-            updateBatchToolbar();
-          };
-        });
-
-        const batchBtn = c.querySelector("#btn-batch");
-        const batchNode = c.querySelector("#batch-node");
-        if (batchBtn && batchNode) {
-          batchNode.onchange = () => {
-            batchBtn.disabled = batchNode.value === "__unset";
-          };
-          batchBtn.onclick = async () => {
-            const checked = c.querySelectorAll(".row-select:checked");
-            const names = Array.from(checked).map(cb => cb.dataset.name);
-            const nodeId = batchNode.value;
-            if (names.length === 0) { toast("请至少选择一个 emby", "err"); return; }
-            if (nodeId === "__unset") { toast("请先选择目标节点", "err"); return; }
-            const target = nodeId === "" ? "直连（无代理）" : nodeName(nodeId);
-            if (!confirm(`将 ${names.length} 个 emby 调整到「${target}」？`)) return;
-            try {
-              await api("/emby/admin/api/embys", {
-                method: "PUT",
-                body: JSON.stringify({ names, node_id: nodeId }),
-              });
-              toast(`已将 ${names.length} 个 emby 调整到「${target}」并推送到所有节点`, "ok");
-              await refreshAll();
-            } catch (e) { toast(e.message, "err"); }
-          };
-        }
-
-        updateBatchToolbar();
       }
 
       // ---------- Nodes（含 Health 列） ----------
@@ -1137,7 +1089,6 @@
         });
       }
       function openAddEmbyModal() {
-        const optionsHtml = '<option value="">直连（无代理）</option>' + '<option value="local">本地代理（Worker）</option>' + state.nodes.map((n) => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.name)}</option>`).join("");
         const root = document.getElementById("modal-root");
         root.innerHTML = `
           <div class="modal-overlay">
@@ -1155,13 +1106,9 @@
                   <label>backend_url</label>
                   <input id="e-backend" placeholder="http://emby.internal:8096" />
                 </div>
-                <div class="field">
-                  <label>节点 <span class="hint">选"直连"则不经过代理</span></label>
-                  <select id="e-node">${optionsHtml}</select>
-                </div>
                 <p class="hint" style="margin:0;">
                   URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
-                  307 转所选节点；选直连则直接 307 到 backend_url
+                  代理模式由顶部全局设置决定（Node 代理 / Worker 代理 / 直连）
                 </p>
                 <div class="modal-footer">
                   <button class="btn btn-ghost" data-close>取消</button>
@@ -1175,9 +1122,8 @@
         const submit = async () => {
           const name = root.querySelector("#e-name").value.trim();
           const backend = root.querySelector("#e-backend").value.trim();
-          const nodeId = root.querySelector("#e-node").value;
           try {
-            await api("/emby/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, node_id: nodeId }) });
+            await api("/emby/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend }) });
             toast("已添加并推送到所有节点", "ok");
             closeModal();
             await refreshAll();

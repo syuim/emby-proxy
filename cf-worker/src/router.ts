@@ -1,8 +1,8 @@
 import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, IMAGE_CACHE_MAX_AGE, IMAGE_CACHE_SWR, STRIP_AUTH_PARAMS, FORWARD_REQ_HEADERS, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, DOUBAN_ORIGIN, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, URL_BASE_PATH, SEMBY_BASE_PATH, SEMBY_ORIGIN } from "./constants";
 import { handleUrlRequest } from "./urlproxy";
-import { readEmbys, readNodes, writeEmbys } from "./storage";
+import { readConfigMeta, readEmbys, readNodes, writeEmbys } from "./storage";
 import { immediateProbe } from "./health";
-import type { EmbyRecord, Env, NodeRecord } from "./types";
+import type { Env, NodeRecord } from "./types";
 
 
 
@@ -24,9 +24,10 @@ export async function handleClientRequest(
     return notFound("reserved path");
   }
 
-  const [embysKV, nodesKV] = await Promise.all([
+  const [embysKV, nodesKV, configMeta] = await Promise.all([
     readEmbys(env),
     readNodes(env),
+    readConfigMeta(env),
   ]);
 
   const emby = embysKV.embys.find((e) => e.name === embyName);
@@ -36,7 +37,7 @@ export async function handleClientRequest(
 
   const subpath = "/" + segments.slice(2).join("/");
 
-  // Worker 本地代理：不 307，Worker 直接 fetch 后端回传
+  // 规则1：自动注册的 d_xxx emby（node_id='local'）始终强制走本地代理，不受全局模式影响
   if (emby.node_id === LOCAL_NODE_ID) {
     return proxyLocal(
       request,
@@ -46,29 +47,32 @@ export async function handleClientRequest(
     );
   }
 
-  const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
+  // 规则2：全局模式决定路由
+  const target = buildTargetUrl(emby.backend_url, subpath, url.search);
+  switch (configMeta.proxy_mode) {
+    case "direct":
+      return new Response(null, {
+        status: 307,
+        headers: { Location: target, "Cache-Control": "no-store" },
+      });
+    case "local":
+      return proxyLocal(request, target, emby.name, emby.backend_url);
+  }
+
+  // case 'node': 按 sort_order 依次探测节点，用全局 active_node_id
+  const node = await chooseNode(env, configMeta.active_node_id, nodesKV.nodes, ctx);
   if (!node) {
-    // 所有代理节点不可用 → Worker 本地代理兜底（不 307，隐藏后端地址）
-    return proxyLocal(
-      request,
-      buildTargetUrl(emby.backend_url, subpath, url.search),
-      emby.name,
-      emby.backend_url,
-    );
+    // 全灭 → Worker 本地代理兜底
+    return proxyLocal(request, target, emby.name, emby.backend_url);
   }
 
   // 节点协议路径不含 /emby 前缀：/<name>/subpath
-  const target = buildTargetUrl(node.public_url, "/" + emby.name + subpath, url.search);
-
-  // 图片缓存已注释，图片/视频统一走 307 节点代理
-  // if (isCacheableImageRequest(request, path)) {
-  //   return serveCachedImage(request, target, ctx);
-  // }
+  const nodeTarget = buildTargetUrl(node.public_url, "/" + emby.name + subpath, url.search);
 
   return new Response(null, {
     status: 307,
     headers: {
-      Location: target,
+      Location: nodeTarget,
       "Cache-Control": "no-store",
     },
   });
@@ -734,16 +738,16 @@ async function probeAlive(node: NodeRecord): Promise<boolean> {
 
 async function chooseNode(
   env: Env,
-  emby: EmbyRecord,
+  activeNodeId: string,
   nodes: NodeRecord[],
   ctx: ExecutionContext,
 ): Promise<NodeRecord | null> {
-  if (!emby.node_id) {
-    // 直连模式：不经过代理
+  if (!activeNodeId) {
+    // 无活跃节点 → 不经过代理（由调用方决定兜底）
     return null;
   }
 
-  const primary = nodes.find((n) => n.id === emby.node_id);
+  const primary = nodes.find((n) => n.id === activeNodeId);
 
   if (primary && (await probeAlive(primary))) {
     return primary;
@@ -752,27 +756,26 @@ async function chooseNode(
   // 当前节点探测不通：并行发起其余节点探测，按排序从当前节点位置依次往下
   // await，第一个活的立即返回（不等更慢/超时的后位节点；全灭最坏 3s 而非 3s×N）。
   // nodes 已由 readNodes 按 sort_order 排好序。
-  const startIdx = nodes.findIndex((n) => n.id === emby.node_id);
+  const startIdx = nodes.findIndex((n) => n.id === activeNodeId);
   const probes = new Map<string, Promise<boolean>>();
   for (const n of nodes) {
-    if (n.id !== emby.node_id) probes.set(n.id, probeAlive(n));
+    if (n.id !== activeNodeId) probes.set(n.id, probeAlive(n));
   }
   let pick: NodeRecord | null = null;
   for (let i = 1; i <= nodes.length; i++) {
     const candidate = nodes[(startIdx + i) % nodes.length]!;
-    if (candidate.id !== emby.node_id && (await probes.get(candidate.id))) {
+    if (candidate.id !== activeNodeId && (await probes.get(candidate.id))) {
       pick = candidate;
       break;
     }
   }
   if (pick) {
     console.warn(
-      `node '${emby.node_id}' unhealthy for emby='${emby.name}', failover to '${pick.id}' (home='${emby.home_node_id}')`,
+      `active node '${activeNodeId}' unhealthy, failover to '${pick.id}'`,
     );
-    // 持久化转移：该不健康节点关联的所有 emby 一并切到新节点，后续请求直达；
-    // home_node_id 保持原始配置，探活确认原节点恢复后由 runHealthCycle 切回。
-    // 写库前实时复核探测一次，防 health 表误报/过期导致整节点 emby 被误搬。
-    const unhealthyId = emby.node_id;
+    // 持久化转移：全局生效节点改为新节点，后续请求直达。
+    // 写库前实时复核探测一次，防 health 表误报/过期导致误搬。
+    const unhealthyId = activeNodeId;
     const pickId = pick.id;
     ctx.waitUntil(
       persistIfConfirmedDead(env, nodes, unhealthyId, pickId),
@@ -780,12 +783,12 @@ async function chooseNode(
     return pick;
   }
 
-  // 全部不健康：持久化为 Worker 本地代理（node_id='local'），后续请求不再逐个
-  // 探健康，由 Worker 直接 fetch 后端；home_node_id 不动，探活发现原节点恢复后
-  // 由 failback 切回。同样先复核探测再写库。
-  const unhealthyId = emby.node_id;
+  // 全部不健康：持久化为 Worker 本地代理（active_node_id='local'），后续请求不再逐个
+  // 探健康，由 Worker 直接 fetch 后端；探活发现节点恢复后由 failback 切回。
+  // 同样先复核探测再写库。
+  const unhealthyId = activeNodeId;
   console.warn(
-    `all nodes unhealthy for emby='${emby.name}', fallback to worker proxy (home='${emby.home_node_id}')`,
+    `all nodes unhealthy, fallback to worker proxy`,
   );
   ctx.waitUntil(persistIfConfirmedDead(env, nodes, unhealthyId, LOCAL_NODE_ID));
   return null;
@@ -810,10 +813,10 @@ async function persistIfConfirmedDead(
         return;
       }
     }
-    const r = await env.EMBY_DB.prepare(
-      "UPDATE embys SET node_id = ? WHERE node_id = ?",
+    await env.EMBY_DB.prepare(
+      "UPDATE config_meta SET active_node_id = ? WHERE id = 1",
     )
-      .bind(targetId, unhealthyId)
+      .bind(targetId)
       .run();
     // 同步回写 health 表，让管理 UI 状态与实际切换一致（不用等 cron）
     await env.EMBY_DB.prepare(
@@ -822,7 +825,7 @@ async function persistIfConfirmedDead(
       .bind(new Date().toISOString(), unhealthyId)
       .run();
     console.log(
-      `[failover] confirmed dead, moved ${r.meta.changes ?? "?"} embys from '${unhealthyId}' to '${targetId || "direct"}', health marked down`,
+      `[failover] confirmed dead, active_node_id changed to '${targetId}', health marked down`,
     );
   } catch (err) {
     console.error(`[failover] persist failed: ${err}`);

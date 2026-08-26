@@ -1,5 +1,6 @@
-import { EMBY_NAME_RE, LOCAL_NODE_ID, RESERVED_NAMES } from "../constants";
+import { EMBY_NAME_RE, RESERVED_NAMES } from "../constants";
 import {
+  readConfigMeta,
   readEmbys,
   readHealth,
   readNodes,
@@ -25,6 +26,21 @@ interface JsonRequest {
 export async function handleListNodes(env: Env): Promise<Response> {
   const [nodes, health] = await Promise.all([readNodes(env), readHealth(env)]);
   return json(200, { ...nodes, health: health.nodes });
+}
+
+export async function handleGetConfig(env: Env): Promise<Response> {
+  const config = await readConfigMeta(env);
+  return json(200, { proxy_mode: config.proxy_mode, active_node_id: config.active_node_id });
+}
+
+export async function handleUpdateConfig(req: JsonRequest, env: Env): Promise<Response> {
+  const { proxy_mode } = req.body ?? {};
+  if (!["node", "local", "direct"].includes(proxy_mode)) {
+    return json(400, { error: "proxy_mode 必须为 node / local / direct" });
+  }
+  await env.EMBY_DB.prepare("UPDATE config_meta SET proxy_mode = ? WHERE id = 1").bind(proxy_mode).run();
+  const config = await readConfigMeta(env);
+  return json(200, { ok: true, proxy_mode: config.proxy_mode, active_node_id: config.active_node_id });
 }
 
 export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionContext): Promise<Response> {
@@ -194,21 +210,18 @@ export async function handleListEmbys(env: Env): Promise<Response> {
 }
 
 export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Response> {
-  const { name, backend_url, node_id } = req.body ?? {};
-  const nodeId = typeof node_id === "string" ? node_id : "";
+  const { name, backend_url } = req.body ?? {};
   const trimmed: Omit<EmbyRecord, "created_at"> = {
     name: typeof name === "string" ? name.trim() : "",
     backend_url:
       typeof backend_url === "string" ? backend_url.trim().replace(/\/$/, "") : "",
-    node_id: nodeId,
-    home_node_id: nodeId,
+    node_id: "",
+    home_node_id: "",
   };
   const err = validateEmby(trimmed);
   if (err) return json(400, { error: err });
 
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
-  const refErr = checkNodeRefs(trimmed, nodes);
-  if (refErr) return json(400, { error: refErr });
 
   if (embys.embys.some((e) => e.name === trimmed.name)) {
     return json(400, { error: `emby '${trimmed.name}' 已存在` });
@@ -231,7 +244,7 @@ export async function handleUpdateEmby(
   if (!emby) return json(404, { error: "emby 不存在" });
 
   let changed = false;
-  const { name: newName, backend_url, node_id } = req.body ?? {};
+  const { name: newName, backend_url } = req.body ?? {};
   if (typeof newName === "string" && newName.trim() && newName.trim() !== name) {
     const v = newName.trim();
     if (embys.embys.some((e) => e.name === v)) {
@@ -249,18 +262,8 @@ export async function handleUpdateEmby(
       changed = true;
     }
   }
-  if (typeof node_id === "string") {
-    if (node_id !== emby.node_id || node_id !== emby.home_node_id) {
-      // 显式指定节点：node_id 与 home_node_id 一并更新（重置故障转移状态）
-      emby.node_id = node_id;
-      emby.home_node_id = node_id;
-      changed = true;
-    }
-  }
   const err = validateEmby(emby);
   if (err) return json(400, { error: err });
-  const refErr = checkNodeRefs(emby, nodes);
-  if (refErr) return json(400, { error: refErr });
 
   if (!changed) return json(200, { ok: true, emby, skipped: true });
   embys.version += 1;
@@ -280,64 +283,6 @@ export async function handleDeleteEmby(env: Env, name: string): Promise<Response
   await writeEmbys(env, embys);
   const push = await fanoutPush(env, embys, nodes, "delete-emby");
   return json(200, { ok: true, push_results: push });
-}
-
-export async function handleBatchUpdateEmbys(
-  req: JsonRequest,
-  env: Env,
-): Promise<Response> {
-  const { names, node_id } = req.body ?? {};
-  if (!Array.isArray(names) || names.length === 0 || typeof node_id !== "string") {
-    return json(400, { error: "names（数组）与 node_id 必填" });
-  }
-
-  const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
-
-  // 验证 node_id 存在（空=直连，local=Worker 本地代理）
-  if (node_id && node_id !== LOCAL_NODE_ID && !nodes.nodes.some((n) => n.id === node_id)) {
-    return json(400, { error: `node_id '${node_id}' 不存在` });
-  }
-
-  // 批量更新（显式指定节点：node_id 与 home_node_id 一并更新）
-  const changedNames: string[] = [];
-  for (const name of names) {
-    const emby = embys.embys.find((e) => e.name === name);
-    if (!emby) return json(400, { error: `emby '${name}' 不存在` });
-    if (emby.node_id !== node_id || emby.home_node_id !== node_id) {
-      emby.node_id = node_id;
-      emby.home_node_id = node_id;
-      changedNames.push(name);
-    }
-  }
-
-  if (changedNames.length === 0) {
-    return json(200, { ok: true, skipped: true, changed: 0 });
-  }
-
-  embys.version += 1;
-
-  // 定向 UPDATE 只改动到的行。D1 单条语句上限 100 个绑定参数，故按 90 分片，
-  // 同一 batch 仍是一个事务。
-  const CHUNK = 90;
-  const stmts: D1PreparedStatement[] = [];
-  for (let i = 0; i < changedNames.length; i += CHUNK) {
-    const slice = changedNames.slice(i, i + CHUNK);
-    const placeholders = slice.map(() => "?").join(",");
-    stmts.push(
-      env.EMBY_DB.prepare(
-        `UPDATE embys SET node_id = ?, home_node_id = ? WHERE name IN (${placeholders})`,
-      ).bind(node_id, node_id, ...slice),
-    );
-  }
-  stmts.push(
-    env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
-      embys.version,
-    ),
-  );
-  await env.EMBY_DB.batch(stmts);
-
-  const push = await fanoutPush(env, embys, nodes, "batch-update-embys");
-  return json(200, { ok: true, changed: changedNames.length, push_results: push });
 }
 
 export async function handleHealth(env: Env): Promise<Response> {
@@ -425,17 +370,6 @@ function validateEmby(e: Omit<EmbyRecord, "created_at">): string | null {
     }
   } catch {
     return "backend_url 不合法";
-  }
-  return null;
-}
-
-function checkNodeRefs(
-  e: Omit<EmbyRecord, "created_at">,
-  nodes: NodesKV,
-): string | null {
-  if (!e.node_id || e.node_id === LOCAL_NODE_ID) return null;
-  if (!nodes.nodes.some((n) => n.id === e.node_id)) {
-    return `node_id '${e.node_id}' 不存在`;
   }
   return null;
 }
