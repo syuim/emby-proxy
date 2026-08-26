@@ -48,16 +48,13 @@ export async function handleClientRequest(
 
   const node = await chooseNode(env, emby, nodesKV.nodes, ctx);
   if (!node) {
-    // 所有代理节点不可用 → 直连 emby backend
-    const target = buildTargetUrl(emby.backend_url, subpath, url.search);
-    // 图片缓存已注释，图片/视频统一走 307 节点代理
-    // if (isCacheableImageRequest(request, path)) {
-    //   return serveCachedImage(request, target, ctx);
-    // }
-    return new Response(null, {
-      status: 307,
-      headers: { Location: target, "Cache-Control": "no-store" },
-    });
+    // 所有代理节点不可用 → Worker 本地代理兜底（不 307，隐藏后端地址）
+    return proxyLocal(
+      request,
+      buildTargetUrl(emby.backend_url, subpath, url.search),
+      emby.name,
+      emby.backend_url,
+    );
   }
 
   // 节点协议路径不含 /emby 前缀：/<name>/subpath
@@ -783,14 +780,14 @@ async function chooseNode(
     return pick;
   }
 
-  // 全部不健康：持久化为直连（node_id=''），后续请求不再逐个探健康，
-  // 直接 307 backend_url；home_node_id 不动，探活发现原节点恢复后由 failback 切回。
-  // 同样先复核探测再写库。
+  // 全部不健康：持久化为 Worker 本地代理（node_id='local'），后续请求不再逐个
+  // 探健康，由 Worker 直接 fetch 后端；home_node_id 不动，探活发现原节点恢复后
+  // 由 failback 切回。同样先复核探测再写库。
   const unhealthyId = emby.node_id;
   console.warn(
-    `all nodes unhealthy for emby='${emby.name}', fallback to direct (home='${emby.home_node_id}')`,
+    `all nodes unhealthy for emby='${emby.name}', fallback to worker proxy (home='${emby.home_node_id}')`,
   );
-  ctx.waitUntil(persistIfConfirmedDead(env, nodes, unhealthyId, ""));
+  ctx.waitUntil(persistIfConfirmedDead(env, nodes, unhealthyId, LOCAL_NODE_ID));
   return null;
 }
 

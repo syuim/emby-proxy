@@ -1,6 +1,7 @@
 import {
   FAIL_THRESHOLD,
   HEALTH_PROBE_TIMEOUT_MS,
+  LOCAL_NODE_ID,
   NODE_HEALTH_PATH,
   STATUS_PATH,
   THROTTLE_FAIL_THRESHOLD,
@@ -110,9 +111,9 @@ export async function runHealthCycle(
 
 /**
  * 故障恢复切回：emby 的 node_id 因故障转移偏离 home_node_id（可能经过多次转移
- * 或兜底降级为直连 ''），home 连续两个探活周期健康（冷却期）才切回，
+ * 或兜底降级为直连 '' / Worker 代理 'local'），home 连续两个探活周期健康（冷却期）才切回，
  * 防止 flapping 节点被反复 failback/failover 来回切。
- * home 本周期就不健康、且兜底直连的 emby，若有其他健康节点则按排序转移过去。
+ * home 本周期就不健康、且兜底降级的 emby，若有其他健康节点则按排序转移过去。
  */
 async function restoreRecoveredEmbys(
   env: Env,
@@ -149,13 +150,14 @@ async function restoreRecoveredEmbys(
     logs.push(`failback->${id}`);
   }
 
-  // 兜底直连救援：node_id=''（曾全灭降级）且 home 本周期仍不健康 → 按排序从
-  // home 位置往下挑第一个健康节点转移。home 已健康但冷却未满的不动，等下周期切回
+  // 兜底救援：node_id 为 ''（曾全灭降级直连）或 'local'（曾全灭降级 Worker 代理）
+  // 且 home 本周期仍不健康 → 按排序从 home 位置往下挑第一个健康节点转移。
+  // home 已健康但冷却未满的不动，等下周期切回
   const strandedHomeIds = new Set(
     embysKV.embys
       .filter(
         (e) =>
-          e.node_id === "" &&
+          (e.node_id === "" || e.node_id === LOCAL_NODE_ID) &&
           e.home_node_id &&
           !health.nodes[e.home_node_id]?.healthy &&
           nodesKV.nodes.some((n) => n.id === e.home_node_id),
@@ -175,10 +177,10 @@ async function restoreRecoveredEmbys(
     if (pick) {
       stmts.push(
         env.EMBY_DB.prepare(
-          "UPDATE embys SET node_id = ? WHERE home_node_id = ? AND node_id = ''",
+          `UPDATE embys SET node_id = ? WHERE home_node_id = ? AND node_id IN ('', '${LOCAL_NODE_ID}')`,
         ).bind(pick, homeId),
       );
-      logs.push(`rescue direct(home=${homeId})->${pick}`);
+      logs.push(`rescue degraded(home=${homeId})->${pick}`);
     }
   }
 

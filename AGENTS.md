@@ -87,8 +87,8 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 - **失败判定（请求驱动）**：router 选节点时对目标节点实时探测 `GET /__health`（3s 超时），isolate 内存缓存使用非对称 TTL（活 30s / 死 15s）。探测不通时并行探测其余节点，按排序取第一个活的立即切换；全灭最坏约 6s。
 - **转移（sticky）**：按节点 `sort_order` 从当前节点位置依次往下（到末尾回绕）挑第一个存活的节点，并把该故障节点关联的所有 emby 的 `node_id` 定向 UPDATE 为新节点（`home_node_id` 不动）。转移可能连锁发生多次。
-- **兜底（也持久化）**：全部节点不健康 → 307 直连 emby 的 `backend_url`，并把不健康节点关联的所有 emby 的 `node_id` UPDATE 为 `''`（直连）；探活周期负责恢复。
-- **本地代理**：`node_id = 'local'` 是哨兵值，表示 Worker 本地代理，不参与故障转移/探活。本地代理会隐藏客户端真实 IP，并对后端 302 / PlaybackInfo / M3U8 切片里的绝对 URL 做同源/跨域改写：同源改写为名称形式 `/emby/<name>/path`，跨域（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。仅显式配置可用。
+- **兜底（也持久化）**：全部节点不健康 → Worker 本地代理兜底（`node_id` UPDATE 为 `'local'`，Worker 直接 fetch 后端回传，不 307 暴露后端地址）；探活周期负责恢复：home 恢复则 failback 切回，home 未恢复但其他节点恢复则 rescue 转移回节点。
+- **本地代理**：`node_id = 'local'` 是哨兵值，表示 Worker 本地代理，不参与故障转移/探活。本地代理会隐藏客户端真实 IP，并对后端 302 / PlaybackInfo / M3U8 切片里的绝对 URL 做同源/跨域改写：同源改写为名称形式 `/emby/<name>/path`，跨域（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。显式配置或全灭兜底时可用。
 - **恢复（failback）**：探活周期发现 `home_node_id` 节点连续两个周期健康（防 flapping）→ 把 `node_id != home_node_id` 的 emby 一次性切回 `home_node_id`。
 - **误报防护**：故障转移持久化写库前，会对“不健康”节点实时复核探测一次（`persistIfConfirmedDead`）；节点实际活着则跳过写库，本次请求仍走转移目标，等 cron 自愈。
 - 管理端显式设置节点（add/update/batch）会同时写 `node_id` 与 `home_node_id`，即重置故障转移状态。
