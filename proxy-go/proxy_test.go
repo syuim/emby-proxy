@@ -513,22 +513,90 @@ func TestFilterResponseHeadersStripsDomain(t *testing.T) {
 
 func TestIsDangerousBackendURL(t *testing.T) {
 	tests := []struct {
-		url    string
-		safe   bool // safe = not dangerous
+		url  string
+		safe bool // safe = not dangerous
 	}{
-		{"http://192.168.1.1:8096", true},     // private, allowed as backend
-		{"http://10.0.0.1:8096", true},        // private, allowed as backend
-		{"http://127.0.0.1:8096", true},       // loopback, allowed as backend
+		{"http://192.168.1.1:8096", true},         // private, allowed as backend
+		{"http://10.0.0.1:8096", true},            // private, allowed as backend
+		{"http://127.0.0.1:8096", true},           // loopback, allowed as backend
 		{"http://169.254.169.254/latest/", false}, // link-local, blocked
-		{"http://[::1]:8096", true},           // loopback IPv6, allowed
-		{"http://1.1.1.1:8096", true},         // public, allowed
-		{"http://0.0.0.0:8096", false},        // unspecified, blocked
-		{"not-a-url", false},                  // invalid, blocked
+		{"http://[::1]:8096", true},               // loopback IPv6, allowed
+		{"http://1.1.1.1:8096", true},             // public, allowed
+		{"http://0.0.0.0:8096", false},            // unspecified, blocked
+		{"not-a-url", false},                      // invalid, blocked
 	}
 	for _, tt := range tests {
 		got := !isDangerousBackendURL(tt.url)
 		if got != tt.safe {
 			t.Errorf("isDangerousBackendURL(%q) = safe=%v, want safe=%v", tt.url, got, tt.safe)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isValidPathPrefix
+// ---------------------------------------------------------------------------
+
+func TestIsValidPathPrefix(t *testing.T) {
+	tests := []struct {
+		prefix string
+		valid  bool
+	}{
+		{"emby", true},
+		{"my-emby_2", true},
+		{"", false},
+		{"a/b", false},
+		{"a b", false},
+		{"中文", false},
+		{strings.Repeat("a", 33), false},
+		{strings.Repeat("a", 32), true},
+		{"admin", false},
+		{"__health", false},
+		{"tmdb", false},
+		{".well-known", false},
+	}
+	for _, tt := range tests {
+		if got := isValidPathPrefix(tt.prefix); got != tt.valid {
+			t.Errorf("isValidPathPrefix(%q) = %v, want %v", tt.prefix, got, tt.valid)
+		}
+	}
+}
+
+func TestApplySnapshotSkipsInvalidPrefix(t *testing.T) {
+	store := NewStore("")
+	diff := store.ApplySnapshot(1, []ProxyEntry{
+		{PathPrefix: "ok-name", BackendURL: "http://a:8096"},
+		{PathPrefix: "bad/prefix", BackendURL: "http://b:8096"},
+		{PathPrefix: "admin", BackendURL: "http://c:8096"},
+	})
+
+	if store.GetBackend("ok-name") != "http://a:8096" {
+		t.Fatal("valid prefix should be applied")
+	}
+	if store.GetBackend("bad/prefix") != "" {
+		t.Fatal("invalid prefix should be skipped")
+	}
+	if store.GetBackend("admin") != "" {
+		t.Fatal("reserved prefix should be skipped")
+	}
+	if len(diff.Added) != 1 {
+		t.Fatalf("expected 1 added, got %v", diff.Added)
+	}
+}
+
+func TestApplySnapshotRejectsVersionRollback(t *testing.T) {
+	store := NewStore("")
+	store.ApplySnapshot(5, []ProxyEntry{{PathPrefix: "a", BackendURL: "http://a:8096"}})
+
+	diff := store.ApplySnapshot(3, []ProxyEntry{{PathPrefix: "b", BackendURL: "http://b:8096"}})
+
+	if diff.NewVersion != 5 {
+		t.Fatalf("rollback should keep version 5, got %d", diff.NewVersion)
+	}
+	if store.GetBackend("b") != "" {
+		t.Fatal("rollback snapshot should not be applied")
+	}
+	if store.GetBackend("a") != "http://a:8096" {
+		t.Fatal("existing config should be preserved")
 	}
 }

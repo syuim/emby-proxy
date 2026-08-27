@@ -1,5 +1,5 @@
 {
-  "name": "tg-toolbox-emby-router",
+  "name": "emby-proxy",
   "version": "0.1.0",
   "private": true,
   "description": "CF Worker: emby 反代统一入口（路由调度 + 健康检测 + 控制面 + 配置同步）",

@@ -1,18 +1,18 @@
-import { describe, it, expect } from "vitest";
-import { DOUBAN_ORIGIN } from "./constants";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   isPrivateHost,
   normalizePath,
-  isCacheableImageRequest,
   buildTargetUrl,
-  buildImageCacheKey,
-  isDoubanCacheablePath,
-  rewriteDoubanLocation,
-  rewriteDoubanBody,
-  rewriteDoubanHtml,
-  rewriteDoubanJs,
+  rewriteM3u8Urls,
   isTmdbImageSubpath,
+  handleDoubanApiRequest,
 } from "./router";
+import { DOUBAN_API_BASE_PATH, DOUBAN_API_ORIGIN } from "./constants";
+
+const origFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = origFetch;
+});
 
 describe("isPrivateHost", () => {
   it.each([
@@ -29,6 +29,21 @@ describe("isPrivateHost", () => {
     ["fe80::1", true],
     ["fd12:3456::1", true],
     ["fc00::1", true],
+    ["localhost", true],
+    ["foo.localhost", true],
+    ["metadata.google.internal", true],
+    ["instance.metadata.google.internal", true],
+    ["[::ffff:127.0.0.1]", true],
+    ["::ffff:127.0.0.1", true],
+    ["::ffff:7f00:1", true],
+    ["[::ffff:7f00:1]", true],
+    ["100.64.0.1", true],
+    ["100.127.255.255", true],
+    ["192.0.0.192", true],
+    ["192.0.0.255", true],
+    ["198.18.0.1", true],
+    ["224.0.0.1", true],
+    ["240.0.0.1", true],
   ])("blocks %s", (host, expected) => {
     expect(isPrivateHost(host)).toBe(expected);
   });
@@ -42,6 +57,13 @@ describe("isPrivateHost", () => {
     ["example.com", false],
     ["my-emby.local", false],
     ["2001:db8::1", false],
+    ["fcbank.com", false],
+    ["fd-example.com", false],
+    ["100.128.0.1", false],
+    ["100.63.255.255", false],
+    ["192.0.1.1", false],
+    ["198.17.0.1", false],
+    ["198.20.0.1", false],
   ])("allows %s", (host, expected) => {
     expect(isPrivateHost(host)).toBe(expected);
   });
@@ -68,32 +90,6 @@ describe("normalizePath", () => {
 
   it("handles empty path", () => {
     expect(normalizePath("/")).toBe("/");
-  });
-});
-
-describe("isCacheableImageRequest", () => {
-  function makeReq(method: string, headers: Record<string, string> = {}): Request {
-    return new Request("http://x.com/test", { method, headers });
-  }
-
-  it("accepts GET /Images/ without Range", () => {
-    expect(isCacheableImageRequest(makeReq("GET"), "/emby/Images/Primary")).toBe(true);
-  });
-
-  it("rejects non-GET", () => {
-    expect(isCacheableImageRequest(makeReq("POST"), "/emby/Images/Primary")).toBe(false);
-  });
-
-  it("rejects Range header", () => {
-    expect(isCacheableImageRequest(makeReq("GET", { Range: "bytes=0-100" }), "/emby/Images/Primary")).toBe(false);
-  });
-
-  it("rejects non-Images path", () => {
-    expect(isCacheableImageRequest(makeReq("GET"), "/emby/Videos/1")).toBe(false);
-  });
-
-  it("is case-insensitive on path", () => {
-    expect(isCacheableImageRequest(makeReq("GET"), "/emby/images/primary")).toBe(true);
   });
 });
 
@@ -135,199 +131,80 @@ describe("buildTargetUrl", () => {
   });
 });
 
-describe("buildImageCacheKey", () => {
-  it("strips auth params from cache key", () => {
-    const req = buildImageCacheKey(
-      "http://node:8080/emby/Images/Primary?api_key=secret&X-Emby-Token=tok&width=300",
+describe("rewriteM3u8Urls", () => {
+  const rewrite = (raw: string) => `W(${raw})`;
+
+  it("rewrites plain segment lines", () => {
+    expect(rewriteM3u8Urls("#EXTINF:5,\nhttp://cdn.example.com/seg.ts\n", rewrite)).toBe(
+      "#EXTINF:5,\nW(http://cdn.example.com/seg.ts)\n",
     );
-    const url = new URL(req.url);
-    expect(url.searchParams.has("api_key")).toBe(false);
-    expect(url.searchParams.has("X-Emby-Token")).toBe(false);
-    expect(url.searchParams.get("width")).toBe("300");
   });
 
-  it("strips X-MediaBrowser-Token", () => {
-    const req = buildImageCacheKey(
-      "http://node:8080/emby/Images/Primary?X-MediaBrowser-Token=abc",
+  it("does not swallow quotes in EXT-X-KEY", () => {
+    const input = `#EXT-X-KEY:METHOD=AES-128,URI="https://emby.example.com/key?tok=1",IV=0x0`;
+    expect(rewriteM3u8Urls(input, rewrite)).toBe(
+      `#EXT-X-KEY:METHOD=AES-128,URI="W(https://emby.example.com/key?tok=1)",IV=0x0`,
     );
-    const url = new URL(req.url);
-    expect(url.searchParams.has("X-MediaBrowser-Token")).toBe(false);
   });
 
-  it("uses GET method", () => {
-    const req = buildImageCacheKey("http://node:8080/emby/Images/Primary");
-    expect(req.method).toBe("GET");
+  it("does not swallow quotes in EXT-X-MAP", () => {
+    const input = `#EXT-X-MAP:URI="https://cdn.example.com/init.mp4"`;
+    expect(rewriteM3u8Urls(input, rewrite)).toBe(
+      `#EXT-X-MAP:URI="W(https://cdn.example.com/init.mp4)"`,
+    );
+  });
+
+  it("leaves text without URLs untouched", () => {
+    const input = "#EXTM3U\n#EXT-X-VERSION:3\n";
+    expect(rewriteM3u8Urls(input, rewrite)).toBe(input);
   });
 });
 
-describe("rewriteDoubanLocation", () => {
-  const base = "https://fw-douban.laoz.org/";
+describe("handleDoubanApiRequest", () => {
+  function mockFetch(status: number, body: string, headers: Record<string, string> = {}) {
+    return vi.fn(async () => new Response(body, { status, headers }));
+  }
 
-  it("prefixes relative locations", () => {
-    expect(rewriteDoubanLocation("/configure", base)).toBe("/douban/configure");
-    expect(rewriteDoubanLocation("/login", base)).toBe("/douban/login");
+  it("proxies GET to the douban api origin", async () => {
+    const mf = mockFetch(200, '{"items":[]}', { "Content-Type": "application/json" });
+    globalThis.fetch = mf as any;
+
+    const req = new Request(`https://proxy.laoz.org${DOUBAN_API_BASE_PATH}/catalog/movie/top250.json`);
+    const resp = await handleDoubanApiRequest(req);
+    expect(resp.status).toBe(200);
+
+    const calls = mf.mock.calls.map((c) => String((c as unknown as [string])[0]));
+    expect(calls).toContain(`${DOUBAN_API_ORIGIN}/catalog/movie/top250.json`);
   });
 
-  it("rewrites absolute locations on the douban origin", () => {
-    expect(rewriteDoubanLocation("https://fw-douban.laoz.org/login?next=x", base)).toBe(
-      "/douban/login?next=x",
-    );
+  it("forwards only whitelisted headers", async () => {
+    const mf = mockFetch(200, "{}", { "Content-Type": "application/json" });
+    globalThis.fetch = mf as any;
+
+    const req = new Request(`https://proxy.laoz.org${DOUBAN_API_BASE_PATH}/catalog`, {
+      headers: {
+        "User-Agent": "test-ua",
+        "X-Forwarded-For": "1.2.3.4",
+        "Cf-Connecting-Ip": "5.6.7.8",
+      },
+    });
+    await handleDoubanApiRequest(req);
+
+    const calls = mf.mock.calls.map((c) => c as unknown as [string, RequestInit]);
+    const target = calls.find((c) => String(c[0]).includes("/catalog"));
+    expect(target).toBeDefined();
+    const sent = new Headers(target![1].headers);
+    expect(sent.get("user-agent")).toBe("test-ua");
+    expect(sent.get("x-forwarded-for")).toBeNull();
+    expect(sent.get("cf-connecting-ip")).toBeNull();
   });
 
-  it("keeps external links untouched", () => {
-    expect(rewriteDoubanLocation("https://www.douban.com/", base)).toBe(
-      "https://www.douban.com/",
-    );
-    expect(rewriteDoubanLocation("https://www.themoviedb.org/movie/1", base)).toBe(
-      "https://www.themoviedb.org/movie/1",
-    );
-  });
+  it("adds CORS headers to the response", async () => {
+    const mf = mockFetch(200, "{}", { "Content-Type": "application/json" });
+    globalThis.fetch = mf as any;
 
-  it("preserves query", () => {
-    expect(rewriteDoubanLocation("/configure?tab=1", base)).toBe("/douban/configure?tab=1");
-  });
-
-  it("returns null for missing location", () => {
-    expect(rewriteDoubanLocation(null, base)).toBeNull();
-  });
-});
-
-describe("rewriteDoubanBody", () => {
-  const worker = "https://proxy.laoz.org";
-  const douban = DOUBAN_ORIGIN;
-
-  it("rewrites manifestUrl from configure save", () => {
-    const body = `{"success":true,"manifestUrl":"https://proxy.laoz.org/suyu/manifest.json"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(
-      `{"success":true,"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json"}`,
-    );
-  });
-
-  it("rewrites http-scheme worker-origin urls (X-Forwarded-Proto missing)", () => {
-    const body = `{"success":true,"manifestUrl":"http://proxy.laoz.org/suyu/manifest.json"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(
-      `{"success":true,"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json"}`,
-    );
-  });
-
-  it("rewrites direct-origin manifestUrl (X-Forwarded-Host stripped)", () => {
-    const body = `{"success":true,"manifestUrl":"${DOUBAN_ORIGIN}/suyu/manifest.json"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(
-      `{"success":true,"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json"}`,
-    );
-  });
-
-  it("keeps direct-proxy image urls untouched (/url)", () => {
-    const body = `{"poster":"https://proxy.laoz.org/url?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(body);
-  });
-
-  it("keeps http-scheme direct-proxy image urls untouched", () => {
-    const body = `{"poster":"http://proxy.laoz.org/url?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(body);
-  });
-
-  it("rewrites manifestUrl but keeps /url image links in mixed body", () => {
-    const body =
-      `{"success":true,"manifestUrl":"https://proxy.laoz.org/suyu/manifest.json",` +
-      `"poster":"https://proxy.laoz.org/url?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(
-      `{"success":true,"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json",` +
-        `"poster":"https://proxy.laoz.org/url?url=https%3A%2F%2Fimg1.doubanio.com%2Fx.jpg"}`,
-    );
-  });
-
-  it("does not double-prefix already-prefixed urls", () => {
-    const body = `{"url":"https://proxy.laoz.org/douban/suyu/manifest.json"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(body);
-  });
-
-  it("leaves encoded query strings untouched", () => {
-    const body = `{"url":"https://proxy.laoz.org/url?url=https%3A%2F%2Fexample.com%2Fa%2Fimage-proxy%2Fb.jpg"}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(body);
-  });
-
-  it("is a no-op without matches", () => {
-    const body = `{"id":"douban:1","links":[{"url":"https://www.douban.com/"}]}`;
-    expect(rewriteDoubanBody(body, worker, douban)).toBe(body);
-  });
-});
-
-describe("rewriteDoubanHtml", () => {
-  const worker = "https://proxy.laoz.org";
-  const douban = DOUBAN_ORIGIN;
-
-  it("prefixes root-relative form action", () => {
-    const html = `<form method="POST" action="/login">`;
-    expect(rewriteDoubanHtml(html, worker, douban)).toBe(
-      `<form method="POST" action="/douban/login">`,
-    );
-  });
-
-  it("prefixes root-relative asset and icon links", () => {
-    const html =
-      `<link rel="stylesheet" href="/assets/foo.css">` +
-      `<script src="/assets/bar.js"></script>` +
-      `<link rel="icon" href="/icon.png">`;
-    expect(rewriteDoubanHtml(html, worker, douban)).toBe(
-      `<link rel="stylesheet" href="/douban/assets/foo.css">` +
-        `<script src="/douban/assets/bar.js"></script>` +
-        `<link rel="icon" href="/douban/icon.png">`,
-    );
-  });
-
-  it("keeps external and protocol-relative urls", () => {
-    const html =
-      `<a href="https://github.com/x">GitHub</a>` +
-      `<script src="https://cdn.example.com/lib.js"></script>` +
-      `<script src="//cdn.example.com/lib2.js"></script>`;
-    expect(rewriteDoubanHtml(html, worker, douban)).toBe(html);
-  });
-
-  it("rewrites manifestUrl inside __INITIAL_DATA__", () => {
-    const html =
-      `<script id="__INITIAL_DATA__" type="application/json">` +
-      `{"manifestUrl":"https://proxy.laoz.org/suyu/manifest.json"}</script>`;
-    expect(rewriteDoubanHtml(html, worker, douban)).toBe(
-      `<script id="__INITIAL_DATA__" type="application/json">` +
-        `{"manifestUrl":"https://proxy.laoz.org/douban/suyu/manifest.json"}</script>`,
-    );
-  });
-});
-
-describe("rewriteDoubanJs", () => {
-  const worker = "https://proxy.laoz.org";
-  const douban = DOUBAN_ORIGIN;
-
-  it("passes through root-relative paths untouched (frontend derives base itself)", () => {
-    const js = `fetch(\`/api/cat-has-data?ids=\${encodeURIComponent(id)}\`);fetch("/configure",{method:"POST"});`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(js);
-  });
-
-  it("still rewrites absolute origin URLs via rewriteDoubanBody", () => {
-    const js = `const u="https://proxy.laoz.org/suyu/manifest.json";`;
-    expect(rewriteDoubanJs(js, worker, douban)).toBe(
-      `const u="https://proxy.laoz.org/douban/suyu/manifest.json";`,
-    );
-  });
-});
-
-describe("isDoubanCacheablePath", () => {
-  it.each([
-    ["/assets/index-abc123.js", true],
-  ])("caches %s", (path, expected) => {
-    expect(isDoubanCacheablePath(path)).toBe(expected);
-  });
-
-  it.each([
-    ["/image-proxy?url=x", false],
-    ["/url?url=x", false],
-    ["/catalog/movie/top250.json", false],
-    ["/manifest.json", false],
-    ["/meta/movie/douban:1.json", false],
-    ["/configure", false],
-    ["/login", false],
-  ])("does not cache %s", (path, expected) => {
-    expect(isDoubanCacheablePath(path)).toBe(expected);
+    const req = new Request(`https://proxy.laoz.org${DOUBAN_API_BASE_PATH}/catalog`);
+    const resp = await handleDoubanApiRequest(req);
+    expect(resp.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
 });

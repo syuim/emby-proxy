@@ -61,7 +61,7 @@ func (ah *AdminHandler) HandleSync(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":              true,
-		"applied_version": data.Version,
+		"applied_version": diff.NewVersion,
 	})
 }
 

@@ -9,7 +9,7 @@ import (
 
 // BackendProber periodically measures TCP connect latency to each emby backend.
 type BackendProber struct {
-	store  *Store
+	store    *Store
 	interval time.Duration
 	stopCh   chan struct{}
 }
@@ -44,19 +44,12 @@ func (bp *BackendProber) loop() {
 }
 
 func (bp *BackendProber) probeAll() {
-	state := bp.store.GetState()
-	proxiesRaw, ok := state["proxies"].([]ProxyEntry)
-	if !ok || len(proxiesRaw) == 0 {
-		return
-	}
-	for _, entry := range proxiesRaw {
-		prefix := entry.PathPrefix
-		backendURL := entry.BackendURL
-		if prefix == "" || backendURL == "" {
+	for _, entry := range bp.store.ListProxies() {
+		if entry.PathPrefix == "" || entry.BackendURL == "" {
 			continue
 		}
-		ms := probeLatency(backendURL)
-		bp.store.SetBackendLatency(prefix, ms)
+		ms := probeLatency(entry.BackendURL)
+		bp.store.SetBackendLatency(entry.PathPrefix, ms)
 	}
 }
 
@@ -81,7 +74,7 @@ func probeLatency(rawURL string) int64 {
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
-		log.Printf("[probe] tcp dial fail prefix=%s err=%v", host, err)
+		log.Printf("[probe] tcp dial fail host=%s err=%v", host, err)
 		return -1
 	}
 	conn.Close()

@@ -20,8 +20,11 @@ import {
 
 export async function routeAdmin(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
-  // 挂载点为 /emby/admin：剥掉 /emby 前缀后按 /admin/* 匹配
-  const path = url.pathname.replace(/^\/emby(?=\/admin)/, "");
+  // 挂载点为 /emby/admin：只在 second==="admin" 精确匹配时进入本函数，
+  // 直接切掉 /emby 前缀（无 lookahead，避免 /emby/administrator 之类歧义）
+  const path = url.pathname.startsWith("/emby")
+    ? url.pathname.slice("/emby".length)
+    : url.pathname;
   const method = request.method;
 
   // Static UI

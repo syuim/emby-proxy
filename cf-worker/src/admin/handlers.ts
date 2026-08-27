@@ -4,7 +4,6 @@ import {
   readEmbys,
   readHealth,
   readNodes,
-  writeEmbys,
   writeHealth,
 } from "../storage";
 import { buildSnapshot, pushSnapshotToAll } from "../sync";
@@ -43,7 +42,7 @@ export async function handleUpdateConfig(req: JsonRequest, env: Env): Promise<Re
   return json(200, { ok: true, proxy_mode: config.proxy_mode, active_node_id: config.active_node_id });
 }
 
-export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionContext): Promise<Response> {
+export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionContext): Promise<Response> {
   const { name, public_url } = req.body ?? {};
   if (typeof name !== "string" || typeof public_url !== "string") {
     return json(400, { error: "name 与 public_url 必填" });
@@ -80,10 +79,7 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx?: ExecutionC
     health.nodes[newNode.id] = nodeHealth;
     await writeHealth(env, health);
   })();
-  if (ctx) {
-    ctx.waitUntil(probeTask);
-  }
-  // ctx 不可用时 fire-and-forget
+  ctx.waitUntil(probeTask);
   return json(201, { ok: true, node: newNode });
 }
 
@@ -178,14 +174,19 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
         "UPDATE embys SET home_node_id = ? WHERE home_node_id = ?",
       ).bind(fallbackId, id),
     );
-    embys.version += 1;
     stmts.push(
-      env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
-        embys.version,
-      ),
+      env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
     );
     embysChanged = true;
   }
+
+  // 清理悬空的 active_node_id（当前生效节点被删时），避免每请求触发一次无谓探测
+  const fallbackId = fallbackNode?.id ?? "";
+  stmts.push(
+    env.EMBY_DB.prepare(
+      "UPDATE config_meta SET active_node_id = ? WHERE id = 1 AND active_node_id = ?",
+    ).bind(fallbackId, id),
+  );
 
   stmts.push(env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id));
 
@@ -193,13 +194,13 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
 
   if (embysChanged) {
     const freshEmbys = await readEmbys(env);
-    pushSnapshotToAll(
+    const push = await pushSnapshotToAll(
       otherNodes,
       buildSnapshot(freshEmbys),
       env.EMBY_SYNC_TOKEN,
       "delete-node",
     );
-    return json(200, { ok: true, reassigned: refs.length });
+    return json(200, { ok: true, reassigned: refs.length, push_results: push });
   }
   return json(200, { ok: true });
 }
@@ -227,9 +228,15 @@ export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Respons
     return json(400, { error: `emby '${trimmed.name}' 已存在` });
   }
   const record: EmbyRecord = { ...trimmed, created_at: new Date().toISOString() };
+  // 定向 INSERT + version 原子递增，避免整表 DELETE + 重插的并发丢数据
+  await env.EMBY_DB.batch([
+    env.EMBY_DB.prepare(
+      "INSERT INTO embys(name, backend_url, node_id, home_node_id, created_at) VALUES(?,?,?,?,?)",
+    ).bind(record.name, record.backend_url, record.node_id, record.home_node_id, record.created_at),
+    env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
+  ]);
   embys.version += 1;
   embys.embys.push(record);
-  await writeEmbys(env, embys);
   const push = await fanoutPush(env, embys, nodes, "add-emby");
   return json(201, { ok: true, emby: record, push_results: push });
 }
@@ -266,8 +273,14 @@ export async function handleUpdateEmby(
   if (err) return json(400, { error: err });
 
   if (!changed) return json(200, { ok: true, emby, skipped: true });
+  // 定向 UPDATE（含重命名）+ version 原子递增
+  await env.EMBY_DB.batch([
+    env.EMBY_DB.prepare("UPDATE embys SET name = ?, backend_url = ? WHERE name = ?").bind(
+      emby.name, emby.backend_url, name,
+    ),
+    env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
+  ]);
   embys.version += 1;
-  await writeEmbys(env, embys);
   const push = await fanoutPush(env, embys, nodes, "update-emby");
   return json(200, { ok: true, emby, push_results: push });
 }
@@ -279,8 +292,12 @@ export async function handleDeleteEmby(env: Env, name: string): Promise<Response
   if (embys.embys.length === before) {
     return json(404, { error: "emby 不存在" });
   }
+  // 定向 DELETE + version 原子递增
+  await env.EMBY_DB.batch([
+    env.EMBY_DB.prepare("DELETE FROM embys WHERE name = ?").bind(name),
+    env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
+  ]);
   embys.version += 1;
-  await writeEmbys(env, embys);
   const push = await fanoutPush(env, embys, nodes, "delete-emby");
   return json(200, { ok: true, push_results: push });
 }
@@ -335,7 +352,8 @@ function generateNodeId(nodes: NodesKV): string {
 }
 
 function validateNode(n: { name: string; public_url: string }): string | null {
-  if (!/^[a-zA-Z0-9_-]{1,32}$/.test(n.name)) {
+  // 节点名规则与 emby 名相同，复用同一常量避免漂移
+  if (!EMBY_NAME_RE.test(n.name)) {
     return "节点名只能包含字母/数字/_/-，长度 1-32";
   }
   return validatePublicUrl(n.public_url);

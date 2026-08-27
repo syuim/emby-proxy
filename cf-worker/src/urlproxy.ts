@@ -116,7 +116,6 @@ export async function handleUrlRequest(request: Request, env: Env, ctx?: Executi
 
   const reqUrl = new URL(request.url);
   const searchParams = reqUrl.searchParams;
-  const origin = request.headers.get("origin") || "*";
 
   let targetURL = "";
   let targetMethod = "GET";
@@ -186,7 +185,7 @@ export async function handleUrlRequest(request: Request, env: Env, ctx?: Executi
     if (cached) {
       return new Response(cached.body, {
         status: cached.status,
-        headers: buildRespHeaders(origin, cached, true),
+        headers: buildRespHeaders(cached, true),
       });
     }
   }
@@ -211,20 +210,15 @@ export async function handleUrlRequest(request: Request, env: Env, ctx?: Executi
 
   return new Response(response.body, {
     status: response.status,
-    headers: buildRespHeaders(origin, response, cacheHit),
+    headers: buildRespHeaders(response, cacheHit),
   });
 }
 
-function buildRespHeaders(origin: string, res: Response, cacheHit: boolean): Record<string, string> {
-  const headers: Record<string, string> = {
-    ...CORS_HEADERS,
-    "Access-Control-Allow-Origin": origin,
+function buildRespHeaders(res: Response, cacheHit: boolean): Record<string, string> {
+  return {
+    ...CORS_HEADERS, // ACAO 固定 *：不回显请求 Origin，避免任意站点跨源读取目标响应
     "Content-Type": res.headers.get("Content-Type") || "application/octet-stream",
     "Cache-Control": cacheHit ? `public, max-age=${IMAGE_CACHE_MAX_AGE}` : "no-store",
+    "Vary": "Origin",
   };
-  // 响应回显请求 Origin，公共缓存需按 Origin 分桶，避免跨源命中导致 CORS 报错
-  if (cacheHit) {
-    headers["Vary"] = "Origin";
-  }
-  return headers;
 }

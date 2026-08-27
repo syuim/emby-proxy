@@ -112,43 +112,6 @@ export async function readHealth(env: Env): Promise<HealthKV> {
 
 // ---------- write ----------
 
-export async function writeNodes(
-  env: Env,
-  value: NodesKV,
-  _cachedPrev?: NodesKV,
-): Promise<void> {
-  const stmts = [env.EMBY_DB.prepare("DELETE FROM nodes")];
-  for (const n of value.nodes) {
-    stmts.push(
-      env.EMBY_DB.prepare(
-        "INSERT INTO nodes(id, name, public_url, created_at, sort_order) VALUES(?,?,?,?,?)",
-      ).bind(n.id, n.name, n.public_url, n.created_at, n.sort_order),
-    );
-  }
-  await env.EMBY_DB.batch(stmts);
-}
-
-export async function writeEmbys(
-  env: Env,
-  value: EmbysKV,
-  _cachedPrev?: EmbysKV,
-): Promise<void> {
-  const stmts = [env.EMBY_DB.prepare("DELETE FROM embys")];
-  for (const e of value.embys) {
-    stmts.push(
-      env.EMBY_DB.prepare(
-        "INSERT INTO embys(name, backend_url, node_id, home_node_id, created_at) VALUES(?,?,?,?,?)",
-      ).bind(e.name, e.backend_url, e.node_id, e.home_node_id, e.created_at),
-    );
-  }
-  stmts.push(
-    env.EMBY_DB.prepare("UPDATE config_meta SET version = ? WHERE id = 1").bind(
-      value.version,
-    ),
-  );
-  await env.EMBY_DB.batch(stmts);
-}
-
 export async function writeHealth(
   env: Env,
   value: HealthKV,
@@ -213,66 +176,4 @@ export function emptyNodeHealth(): NodeHealth {
     applied_version: null,
     last_sync_error: null,
   };
-}
-
-// ---------- comparison (no longer needed for D1, kept for signature compat) ----------
-
-export function nodesEqual(a: NodesKV, b: NodesKV): boolean {
-  if (a.nodes.length !== b.nodes.length) return false;
-  for (let i = 0; i < a.nodes.length; i++) {
-    const an = a.nodes[i];
-    const bn = b.nodes[i];
-    if (
-      an.id !== bn.id ||
-      an.name !== bn.name ||
-      an.public_url !== bn.public_url ||
-      an.created_at !== bn.created_at ||
-      an.sort_order !== bn.sort_order
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function embysEqual(a: EmbysKV, b: EmbysKV): boolean {
-  if (a.version !== b.version) return false;
-  if (a.embys.length !== b.embys.length) return false;
-  for (let i = 0; i < a.embys.length; i++) {
-    const ae = a.embys[i];
-    const be = b.embys[i];
-    if (
-      ae.name !== be.name ||
-      ae.backend_url !== be.backend_url ||
-      ae.node_id !== be.node_id ||
-      ae.created_at !== be.created_at
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function healthEqual(a: HealthKV, b: HealthKV): boolean {
-  const aKeys = Object.keys(a.nodes);
-  const bKeys = Object.keys(b.nodes);
-  if (aKeys.length !== bKeys.length) return false;
-  const aSet = new Set(aKeys);
-  for (const k of bKeys) {
-    if (!aSet.has(k)) return false;
-  }
-  for (const k of aKeys) {
-    const an = a.nodes[k];
-    const bn = b.nodes[k];
-    if (
-      an.healthy !== bn.healthy ||
-      an.consecutive_fails !== bn.consecutive_fails ||
-      an.last_latency_ms !== bn.last_latency_ms ||
-      an.applied_version !== bn.applied_version ||
-      an.last_sync_error !== bn.last_sync_error
-    ) {
-      return false;
-    }
-  }
-  return true;
 }

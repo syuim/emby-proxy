@@ -11,35 +11,82 @@ import (
 	"time"
 )
 
-const dnsCacheTTL = 10 * time.Minute
+const (
+	dnsCacheTTL        = 10 * time.Minute
+	dnsCacheMaxEntries = 1024
+)
 
 type dnsCacheEntry struct {
 	ips       []net.IP
 	expiresAt time.Time
 }
 
-var dnsCache sync.Map
+var (
+	dnsCacheMu sync.Mutex
+	dnsCache   = map[string]dnsCacheEntry{}
+)
 
-// cachedLookupIP resolves host to IPs with a TTL cache.
+// cachedLookupIP resolves host to IPs with a bounded TTL cache.
 func cachedLookupIP(host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return []net.IP{ip}, nil
 	}
 	now := time.Now()
-	if v, ok := dnsCache.Load(host); ok {
-		entry := v.(dnsCacheEntry)
+	dnsCacheMu.Lock()
+	if entry, ok := dnsCache[host]; ok {
 		if now.Before(entry.expiresAt) {
+			dnsCacheMu.Unlock()
 			return entry.ips, nil
 		}
+		delete(dnsCache, host)
 	}
+	dnsCacheMu.Unlock()
+
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		return nil, err
 	}
-	dnsCache.Store(host, dnsCacheEntry{ips: ips, expiresAt: now.Add(dnsCacheTTL)})
+	dnsCacheMu.Lock()
+	if len(dnsCache) >= dnsCacheMaxEntries {
+		// 先清过期条目，仍满则整体清空（DNS 重解析成本低）
+		for k, e := range dnsCache {
+			if !now.Before(e.expiresAt) {
+				delete(dnsCache, k)
+			}
+		}
+		if len(dnsCache) >= dnsCacheMaxEntries {
+			dnsCache = map[string]dnsCacheEntry{}
+		}
+	}
+	dnsCache[host] = dnsCacheEntry{ips: ips, expiresAt: now.Add(dnsCacheTTL)}
+	dnsCacheMu.Unlock()
 	return ips, nil
 }
 
+// 与 cf-worker 的 EMBY_NAME_RE / RESERVED_NAMES 保持一致
+var reservedPrefixes = map[string]bool{
+	"admin":       true,
+	"api":         true,
+	"health":      true,
+	"__health":    true,
+	"favicon.ico": true,
+	"robots.txt":  true,
+	".well-known": true,
+	"_":           true,
+	"tmdb":        true,
+}
+
+func isValidPathPrefix(p string) bool {
+	if len(p) == 0 || len(p) > 32 {
+		return false
+	}
+	for _, c := range p {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return !reservedPrefixes[p]
+}
 
 type ProxyEntry struct {
 	PathPrefix string `json:"path_prefix"`
@@ -47,9 +94,9 @@ type ProxyEntry struct {
 }
 
 type Snapshot struct {
-	Version  int           `json:"version"`
-	Proxies  []ProxyEntry  `json:"proxies"`
-	SyncedAt string        `json:"synced_at,omitempty"`
+	Version  int          `json:"version"`
+	Proxies  []ProxyEntry `json:"proxies"`
+	SyncedAt string       `json:"synced_at,omitempty"`
 }
 
 // Store holds the in-memory proxy config with thread-safe access and disk persistence.
@@ -116,13 +163,13 @@ func (s *Store) SetBackendLatency(prefix string, latencyMs int64) {
 	s.mu.Unlock()
 }
 
-// GetBackendLatencies returns a copy of the current backend latency map.
-func (s *Store) GetBackendLatencies() map[string]int64 {
+// ListProxies returns a copy of the current prefix → backend entries.
+func (s *Store) ListProxies() []ProxyEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make(map[string]int64, len(s.backendLatencies))
-	for k, v := range s.backendLatencies {
-		out[k] = v
+	out := make([]ProxyEntry, 0, len(s.proxies))
+	for k, v := range s.proxies {
+		out = append(out, ProxyEntry{PathPrefix: k, BackendURL: v})
 	}
 	return out
 }
@@ -160,6 +207,10 @@ type SnapshotDiff struct {
 func (s *Store) ApplySnapshot(version int, proxies []ProxyEntry) SnapshotDiff {
 	filtered := make([]ProxyEntry, 0, len(proxies))
 	for _, p := range proxies {
+		if !isValidPathPrefix(p.PathPrefix) {
+			log.Printf("snapshot skipped invalid prefix: prefix=%q backend=%s", p.PathPrefix, p.BackendURL)
+			continue
+		}
 		if isDangerousBackendURL(p.BackendURL) {
 			log.Printf("snapshot skipped dangerous backend: prefix=%s backend=%s", p.PathPrefix, p.BackendURL)
 			continue
@@ -168,6 +219,12 @@ func (s *Store) ApplySnapshot(version int, proxies []ProxyEntry) SnapshotDiff {
 	}
 
 	s.mu.Lock()
+	// version 单调性：拒绝旧 snapshot 回退（过期推送/重放）
+	if version < s.version {
+		s.mu.Unlock()
+		log.Printf("snapshot rejected: version=%d < current=%d", version, s.version)
+		return SnapshotDiff{OldVersion: s.version, NewVersion: s.version}
+	}
 	diff := SnapshotDiff{OldVersion: s.version, NewVersion: version}
 	oldProxies := s.proxies
 	newProxies := make(map[string]string, len(filtered))
@@ -188,7 +245,7 @@ func (s *Store) ApplySnapshot(version int, proxies []ProxyEntry) SnapshotDiff {
 	}
 	s.version = version
 	s.proxies = newProxies
-		s.backendLatencies = make(map[string]int64)
+	s.backendLatencies = make(map[string]int64)
 	s.mu.Unlock()
 
 	s.persist(version, filtered)
@@ -255,4 +312,3 @@ func isDangerousBackendURL(rawURL string) bool {
 	}
 	return false
 }
-

@@ -35,9 +35,10 @@ func main() {
 	proxyHandler := NewProxyHandler(store)
 	adminHandler := NewAdminHandler(store, syncToken)
 
-	// 后台探测 emby backend 延迟，每分钟一次
+	// 后台探测 emby backend 延迟，每 5 分钟一次
 	prober := NewBackendProber(store, 5*time.Minute)
 	prober.Start()
+	defer prober.Stop()
 
 	mux := http.NewServeMux()
 

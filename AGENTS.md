@@ -73,8 +73,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 - `/emby/admin`：管理 UI / API
 - `/tmdb/...`：TMDB 反代（一级命名空间，逻辑同原 `/emby/tmdb`）。GET 且路径以 `/t/p/` 开头（TMDB 图片固定结构）时转发到 `image.tmdb.org` 并复用 `/url` 通用代理（UA 伪装 + 目标头规则 + 图片缓存），其余路径转发到 `api.themoviedb.org`
 - `/url`：通用 URL 代理，无鉴权（原 `/img` 已并入，`urlproxy.ts` 单一实现），可代理任意 http(s) 资源。仅 `image/*` 且 2xx 响应走 Cache API 缓存（7 天），API/JSON 每次回源并返回 `no-store`；目标请求头（Referer/Origin 等）按内置规则 + 外部 Referer 规则文件自动补齐（防盗链/鉴权，如 gofans API 需注入 `Origin: https://gofans.cn`）
-- `/douban/...`：豆瓣 Stremio addon 反代（`http://rn.127315.xyz:31001` 直连，不依赖 fw-douban.laoz.org），无鉴权。UA 透传保留 forward 行为；注入 `X-Forwarded-Host/Proto` 使 addon 生成的 origin 绝对 URL（保存配置返回的 `manifestUrl`）指向 Worker（线上实测 `X-Forwarded-Proto` 未生效，addon 退回 http scheme，改写需兜底 http/https 双变体）；图片 URL 由 addon 直出 `https://proxy.laoz.org/url?url=...`（不经 addon 节点），`rewriteDoubanBody` 对 `/url` 前缀做占位保护、**不**加 `/douban` 前缀，避免代理断裂；响应文本统一前缀改写保证闭环：JSON 绝对 URL（`/url` 图片链接除外）、HTML root-relative 链接（form action / assets / icon，200 与 401 登录失败页均改写）、JS `fetch("/configure")` 路径；`history.replaceState` 的 `/${configId}/configure` 模板**不**改写（configId 提取自改写后 manifestUrl 第一段，加前缀会变 `/douban/douban/configure`；不改写则地址栏落在 `/douban/configure`，刷新 302 回默认配置页）。仅 `/assets/` 走 CF 边缘缓存，catalog 等 JSON 不缓存（UA 不进 cache key，forward UA 的 `tmdb:` ID 响应会污染普通缓存）
-- `/doubanapi/...`：豆瓣简化版 API 反代（`http://rn.127315.xyz:4000`，与 addon 同机不同容器），仅 JSON catalog 无 body 改写，无鉴权
+- `/doubanapi/...`：豆瓣简化版 API 反代（`http://rn.127315.xyz:4000`），仅 JSON catalog 无 body 改写，无鉴权
 - 根路径 `/` 302 到 `/emby/admin`；`/__health` 保留在顶层；其余一级路径 404
 
 节点协议路径不含 `/emby` 前缀：307 到节点仍是 `/<name>/subpath`。只有两种访问形式：名称访问 `/emby/<name>/path` 走节点选择（local 亦在其中），地址访问 `/emby/http(s)://...`（原样或 URL 编码）必走本地代理；不存在 `/emby/<name>/<url>` 形式。
@@ -126,7 +125,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
   cd cf-worker && CLOUDFLARE_ACCOUNT_ID=9a2c5f84e3346b4d2310792e4f759881 npx wrangler d1 migrations apply emby-proxy --remote
   ```
   `CLOUDFLARE_ACCOUNT_ID` 必须显式给：`d1 migrations` 子命令不读 `wrangler.toml` 的 `account_id`（wrangler 3.x），多账号下会报 “More than one account available”。本地若报 `7403`，先跑一次 `npx wrangler whoami` 刷新 OAuth token 再重试。
-- **Go 节点**：使用 Agent 调用 `ops` subagent 执行，机器信息以 ops agent 为准。
+- **Go 节点**：使用 Agent 调用 `ops` subagent 执行，机器信息以 ops agent 为准。容器以非 root（uid 10001）运行，`./data` volume 宿主目录属主需与 uid 10001 匹配（`chown -R 10001:10001 ./data`），否则节点无法落盘配置。
 
 ### 部署后验证
 
@@ -137,7 +136,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 ## Image Cache
 
-图片缓存功能已注释禁用，图片/视频统一走节点 307 代理。代码保留在 `router.ts` 中，仅注释掉调用点；恢复只需取消注释两处 `isCacheableImageRequest` / `serveCachedImage` 调用。
+图片缓存已移除（2026-08 清理死代码），图片/视频统一走节点 307 代理。图片缓存能力由 `/url` 通用代理承担（`image/*` 且 2xx 走 Cache API 缓存 7 天）。如需恢复本地代理的图片缓存，可从 git 历史找回 `serveCachedImage` / `buildImageCacheKey`。
 
 ## Diagnostics
 

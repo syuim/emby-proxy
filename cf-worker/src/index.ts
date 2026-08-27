@@ -1,8 +1,8 @@
 import { routeAdmin } from "./admin";
-import { EMBY_BASE_PATH, URL_BASE_PATH, DOUBAN_BASE_PATH, DOUBAN_API_BASE_PATH, TMDB_BASE_PATH, SEMBY_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, URL_BASE_PATH, DOUBAN_API_BASE_PATH, TMDB_BASE_PATH } from "./constants";
 import { runHealthCycle } from "./health";
 import { handleUrlRequest } from "./urlproxy";
-import { handleClientRequest, handleDirectRequest, handleDoubanRequest, handleDoubanApiRequest, handleTmdbRequest, handleSembyRequest } from "./router";
+import { handleClientRequest, handleDirectRequest, handleDoubanApiRequest, handleTmdbRequest } from "./router";
 import type { Env } from "./types";
 
 export default {
@@ -47,16 +47,6 @@ export default {
     // 一级命名空间 /doubanapi：豆瓣 API 反代（简化版，仅 JSON 无 body 改写）
     if (url.pathname === DOUBAN_API_BASE_PATH || url.pathname.startsWith(DOUBAN_API_BASE_PATH + "/")) {
       return handleDoubanApiRequest(request);
-    }
-
-    // 一级命名空间 /douban：豆瓣 addon 反代
-    if (url.pathname === DOUBAN_BASE_PATH || url.pathname.startsWith(DOUBAN_BASE_PATH + "/")) {
-      return handleDoubanRequest(request, ctx);
-    }
-
-    // 一级命名空间 /semby：Semby 聚合代理（直连 RN:8096）
-    if (url.pathname === SEMBY_BASE_PATH || url.pathname.startsWith(SEMBY_BASE_PATH + "/")) {
-      return handleSembyRequest(request);
     }
 
     return new Response("Not Found", {
