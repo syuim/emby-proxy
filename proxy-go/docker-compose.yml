@@ -1,6 +1,6 @@
 services:
   emby-proxy:
-    build: .
+    image: ghcr.io/syuim/emby-proxy:latest
     restart: unless-stopped
     environment:
       TZ: Asia/Shanghai
@@ -16,3 +16,5 @@ services:
       retries: 3
     volumes:
       - ./data:/app/data
+    labels:
+      - com.centurylinklabs.watchtower.enable=true

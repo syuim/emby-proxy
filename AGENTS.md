@@ -125,7 +125,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
   cd cf-worker && CLOUDFLARE_ACCOUNT_ID=9a2c5f84e3346b4d2310792e4f759881 npx wrangler d1 migrations apply emby-proxy --remote
   ```
   `CLOUDFLARE_ACCOUNT_ID` 必须显式给：`d1 migrations` 子命令不读 `wrangler.toml` 的 `account_id`（wrangler 3.x），多账号下会报 “More than one account available”。本地若报 `7403`，先跑一次 `npx wrangler whoami` 刷新 OAuth token 再重试。
-- **Go 节点**：使用 Agent 调用 `ops` subagent 执行，机器信息以 ops agent 为准。容器以非 root（uid 10001）运行，`./data` volume 宿主目录属主需与 uid 10001 匹配（`chown -R 10001:10001 ./data`），否则节点无法落盘配置。
+- **Go 节点**：使用 Agent 调用 `ops` subagent 执行，机器信息以 ops agent 为准。镜像由 GitHub Actions 自动构建推送 `ghcr.io/syuim/emby-proxy:latest`（`.github/workflows/docker-image.yml`，`proxy-go/**` 变更触发，公共镜像无需登录）；节点部署只拉镜像：`docker compose pull && docker compose up -d`（配 watchtower 的机器可自动更新）。容器以非 root（uid 10001）运行，`./data` volume 宿主目录属主需与 uid 10001 匹配（`chown -R 10001:10001 ./data`），否则节点无法落盘配置。
 
 ### 部署后验证
 

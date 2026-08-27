@@ -1,0 +1,5 @@
+data/
+proxy
+*.test
+.git
+README.md
