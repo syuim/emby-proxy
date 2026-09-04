@@ -1,7 +1,6 @@
 import {
   FAIL_THRESHOLD,
   HEALTH_PROBE_TIMEOUT_MS,
-  LOCAL_NODE_ID,
   NODE_HEALTH_PATH,
   STATUS_PATH,
   THROTTLE_FAIL_THRESHOLD,
@@ -9,7 +8,6 @@ import {
 } from "./constants";
 import {
   emptyNodeHealth,
-  readConfigMeta,
   readEmbys,
   readHealth,
   readNodes,
@@ -22,7 +20,6 @@ import type {
   HealthKV,
   NodeHealth,
   NodeRecord,
-  NodesKV,
   PushResult,
 } from "./types";
 
@@ -99,81 +96,10 @@ export async function runHealthCycle(
     ).bind(...staleIds).run();
   }
 
-  // 恢复机制：home（sort_order 第一个）连续两个周期健康（冷却期，防 flapping 反复切）→ 切回；
-  // 降级兜底（active_node_id 为 '' 或 'local'）时，home 未恢复但有其他健康节点则先转移过去。
-  // force=true（手动立即探测）时跳过冷却，只要有健康即切回。
-  ctx.waitUntil(restoreRecoveredEmbys(env, nodesKV, prevHealth, newHealth, force));
-
   // 补齐：节点 applied_version 与 KV embys.version 不一致（或未知）时异步补推
   ctx.waitUntil(
     backfillOutdatedNodes(env, embysKV, outcomes, newHealth),
   );
-}
-
-/**
- * 故障恢复切回：全局 active_node_id 因故障转移偏离 home（sort_order 第一个节点）
- * 或降级为 ''/local，home 连续两个探活周期健康（冷却期）才切回，
- * 防止 flapping 节点被反复 failback/failover 来回切。
- * 降级兜底期间，home 未恢复但有其他健康节点则按序转移过去。
- */
-async function restoreRecoveredEmbys(
-  env: Env,
-  nodesKV: NodesKV,
-  prevHealth: HealthKV,
-  health: HealthKV,
-  force = false,
-): Promise<void> {
-  const stmts: D1PreparedStatement[] = [];
-  const logs: string[] = [];
-
-  // 冷却期：本周期 + 上一周期都健康才算「稳定恢复」；force=true（手动探测）跳过冷却
-  const stablyHealthy = (id: string) =>
-    force ||
-    (health.nodes[id]?.healthy === true && prevHealth.nodes[id]?.healthy === true);
-
-  const config = await readConfigMeta(env);
-  const homeId = nodesKV.nodes[0]?.id; // sort_order 第一个节点
-
-  if (!homeId) return;
-
-  // --- Failback ---
-  // active_node_id != home，且 home 稳定健康 → 切换回 home
-  if (config.active_node_id !== homeId && stablyHealthy(homeId)) {
-    stmts.push(
-      env.EMBY_DB.prepare(
-        "UPDATE config_meta SET active_node_id = ? WHERE id = 1",
-      ).bind(homeId),
-    );
-    logs.push(`failback->${homeId}`);
-  }
-
-  // --- Rescue ---
-  // active_node_id 降级为 ''（直连）或 'local'（Worker 代理），
-  // 且 home 本周期不健康，但有其他健康节点 → 按序转移
-  const isDegraded = config.active_node_id === "" || config.active_node_id === LOCAL_NODE_ID;
-  if (isDegraded && !health.nodes[homeId]?.healthy) {
-    const startIdx = nodesKV.nodes.findIndex((n) => n.id === homeId);
-    let pick: string | null = null;
-    for (let i = 1; i <= nodesKV.nodes.length; i++) {
-      const candidate = nodesKV.nodes[(startIdx + i) % nodesKV.nodes.length]!;
-      if (candidate.id !== homeId && health.nodes[candidate.id]?.healthy) {
-        pick = candidate.id;
-        break;
-      }
-    }
-    if (pick) {
-      stmts.push(
-        env.EMBY_DB.prepare(
-          "UPDATE config_meta SET active_node_id = ? WHERE id = 1",
-        ).bind(pick),
-      );
-      logs.push(`rescue degraded->${pick}`);
-    }
-  }
-
-  if (stmts.length === 0) return;
-  await env.EMBY_DB.batch(stmts);
-  console.log(`[failback] ${logs.join(", ")}`);
 }
 
 async function probeNode(

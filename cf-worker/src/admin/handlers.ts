@@ -48,7 +48,7 @@ export async function handleListNodes(env: Env): Promise<Response> {
 
 export async function handleGetConfig(env: Env): Promise<Response> {
   const config = await readConfigMeta(env);
-  return json(200, { proxy_mode: config.proxy_mode, active_node_id: config.active_node_id });
+  return json(200, { proxy_mode: config.proxy_mode });
 }
 
 export async function handleUpdateConfig(req: JsonRequest, env: Env): Promise<Response> {
@@ -58,7 +58,7 @@ export async function handleUpdateConfig(req: JsonRequest, env: Env): Promise<Re
   }
   await env.EMBY_DB.prepare("UPDATE config_meta SET proxy_mode = ? WHERE id = 1").bind(proxy_mode).run();
   const config = await readConfigMeta(env);
-  return json(200, { ok: true, proxy_mode: config.proxy_mode, active_node_id: config.active_node_id });
+  return json(200, { ok: true, proxy_mode: config.proxy_mode });
 }
 
 export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -168,23 +168,6 @@ export async function handleUpdateNode(
   return json(200, { ok: true, node });
 }
 
-export async function handleReorderNodes(req: JsonRequest, env: Env): Promise<Response> {
-  const { ids } = req.body ?? {};
-  if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => typeof x !== "string")) {
-    return json(400, { error: "ids（节点 id 数组）必填" });
-  }
-  const nodes = await readNodes(env);
-  const known = new Set(nodes.nodes.map((n) => n.id));
-  if (ids.length !== known.size || ids.some((x: string) => !known.has(x))) {
-    return json(400, { error: "ids 必须包含且仅包含全部节点" });
-  }
-  const stmts = ids.map((nodeId: string, i: number) =>
-    env.EMBY_DB.prepare("UPDATE nodes SET sort_order = ? WHERE id = ?").bind(i, nodeId),
-  );
-  await env.EMBY_DB.batch(stmts);
-  return json(200, { ok: true });
-}
-
 export async function handleDeleteNode(env: Env, id: string): Promise<Response> {
   const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
   const target = nodes.nodes.find((n) => n.id === id);
@@ -218,14 +201,6 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
     );
     embysChanged = true;
   }
-
-  // 清理悬空的 active_node_id（当前生效节点被删时），避免每请求触发一次无谓探测
-  const fallbackId = fallbackNode?.id ?? "";
-  stmts.push(
-    env.EMBY_DB.prepare(
-      "UPDATE config_meta SET active_node_id = ? WHERE id = 1 AND active_node_id = ?",
-    ).bind(fallbackId, id),
-  );
 
   // 清理组关联
   stmts.push(env.EMBY_DB.prepare("DELETE FROM node_groups WHERE node_id = ?").bind(id));

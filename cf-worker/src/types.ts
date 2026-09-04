@@ -3,7 +3,7 @@ export interface NodeRecord {
   name: string;
   public_url: string;
   created_at: string;
-  // 排序序号，故障转移按此顺序依次往下选择
+  // 插入序号（新增时自增，仅用于列表稳定顺序；已无故障转移排序用途）
   sort_order: number;
   // 适合的网络标签（'ct' 电信 / 'cu' 联通 / 'cm' 移动 / 'overseas' 海外），空数组 = 任何网络可选
   isp_tags: string[];
@@ -62,7 +62,6 @@ export interface SyncSnapshot {
 
 export interface ConfigMeta {
   proxy_mode: 'node' | 'local' | 'direct';
-  active_node_id: string;
   version: number;
 }
 

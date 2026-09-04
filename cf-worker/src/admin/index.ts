@@ -16,7 +16,6 @@ import {
   handleListNodes,
   handleManualSync,
   handleProbe,
-  handleReorderNodes,
   handleUpdateConfig,
   handleUpdateEmby,
   handleUpdateGroup,
@@ -61,9 +60,6 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
   if (path === "/admin/api/nodes") {
     if (method === "GET") return handleListNodes(env);
     if (method === "POST") return wrapJson(request, (req) => handleAddNode(req, env, ctx));
-  }
-  if (path === "/admin/api/nodes/reorder" && method === "POST") {
-    return wrapJson(request, (req) => handleReorderNodes(req, env));
   }
   const nodeMatch = path.match(/^\/admin\/api\/nodes\/([^/]+)$/);
   if (nodeMatch) {

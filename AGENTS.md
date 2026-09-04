@@ -76,7 +76,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 一级路径按功能划分（硬切换，无旧路径兼容）：
 
-- `/emby/<name>/path`：名称访问，走节点选择
+- `/emby/<name>/path`：名称访问，node 模式下绑组走组路由、未绑组 Worker local；local/direct 全局模式按模式处理
 - `/emby/http(s)://...`：地址访问（原样或 URL 编码），必走本地代理，无鉴权
 - `/emby/admin`：管理 UI / API
 - `/tmdb/...`：TMDB 反代（一级命名空间，逻辑同原 `/emby/tmdb`）。GET 且路径以 `/t/p/` 开头（TMDB 图片固定结构）时转发到 `image.tmdb.org` 并复用 `/url` 通用代理（UA 伪装 + 目标头规则 + 图片缓存），其余路径转发到 `api.themoviedb.org`
@@ -84,31 +84,29 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 - `/doubanapi/...`：豆瓣简化版 API 反代（`http://rn.127315.xyz:4000`），仅 JSON catalog 无 body 改写，无鉴权
 - 根路径 `/` 302 到 `/emby/admin`；`/__health` 保留在顶层；其余一级路径 404
 
-节点协议路径不含 `/emby` 前缀：307 到节点仍是 `/<name>/subpath`。只有两种访问形式：名称访问 `/emby/<name>/path` 走节点选择（local 亦在其中），地址访问 `/emby/http(s)://...`（原样或 URL 编码）必走本地代理；不存在 `/emby/<name>/<url>` 形式。
+节点协议路径不含 `/emby` 前缀：307 到节点仍是 `/<name>/subpath`。只有两种访问形式：名称访问 `/emby/<name>/path`（node 模式下绑组走组节点、未绑组 Worker local），地址访问 `/emby/http(s)://...`（原样或 URL 编码）必走本地代理；不存在 `/emby/<name>/<url>` 形式。
 
 地址访问原样形式会自动注册 emby，`node_id`/`home_node_id` 固定为 `local`，只写 emby 记录、不 bump version、不 fan-out 推节点（否则 cron 会误判补推）；编码形式是本地代理改写的回流产物，不触发注册。URL 自带 query（CDN 签名）与外层 query 会合并。地址访问与通用代理均无鉴权，等同 open proxy，依赖域名不公开。
 
 ## Failover Behavior
 
-代理模式是全局配置（`config_meta.proxy_mode`，管理 UI 顶部切换）：`node`（Node 代理）/ `local`（Worker 代理）/ `direct`（直连）。`config_meta.active_node_id` 是 node 模式下的当前生效节点（故障转移会改写）。`embys.node_id` 仅保留一个用途：`'local'` 标记自动注册的 d_xxx emby（地址访问回流产物，始终强制 Worker 本地代理，不受全局模式影响）。
+代理模式是全局配置（`config_meta.proxy_mode`，管理 UI 顶部切换）：`node` / `local`（Worker 代理）/ `direct`（直连）。**节点只通过代理组使用**：node 模式下绑组 emby 走代理组路由，未绑组 emby 直接 Worker local（不探测任何节点）。全局节点选择 / `active_node_id` / 故障转移机制已移除（migration 0008 删除 `config_meta.active_node_id` 列）。`embys.node_id` 仅保留一个用途：`'local'` 标记自动注册的 d_xxx emby（地址访问回流产物，始终强制 Worker 本地代理，不受全局模式影响）。
 
-- **失败判定（请求驱动）**：router 选节点时对 `active_node_id` 节点实时探测 `GET /__health`（3s 超时），isolate 内存缓存使用非对称 TTL（活 30s / 死 15s）。探测不通时并行探测其余节点，按排序取第一个活的立即切换；全灭最坏约 6s。
-- **转移（sticky）**：按节点 `sort_order` 从当前节点位置依次往下（到末尾回绕）挑第一个存活的节点，并把 `config_meta.active_node_id` UPDATE 为新节点。转移可能连锁发生多次。
-- **兜底（也持久化）**：全部节点不健康 → Worker 本地代理兜底（`active_node_id` UPDATE 为 `'local'`，Worker 直接 fetch 后端回传，不 307 暴露后端地址）；探活周期负责恢复：home 恢复则 failback 切回，home 未恢复但其他节点恢复则 rescue 转移回节点。
-- **本地代理**：`active_node_id = 'local'`（或全局模式为 local）时 Worker 直接 fetch 后端回传，隐藏客户端真实 IP，并对后端 302 / PlaybackInfo / M3U8 切片里的绝对 URL 做同源/跨域改写：同源改写为名称形式 `/emby/<name>/path`，跨域（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。显式配置或全灭兜底时可用。
-- **恢复（failback）**：home = sort_order 第一个节点。探活周期发现 home 连续两个周期健康（防 flapping）→ 把 `active_node_id` 切回 home；reorder 后首节点变化，下一周期自动 failback。
-- **误报防护**：故障转移持久化写库前，会对“不健康”节点实时复核探测一次（`persistIfConfirmedDead`）；节点实际活着则跳过写库，本次请求仍走转移目标，等 cron 自愈。
-- 全局模式切换（PUT `/admin/api/config`）不写 `embys` 表，也不 bump version / fan-out（节点 snapshot 只含 path_prefix/backend_url，与模式无关）。
+- **绑组 emby（node 模式）**：组内每请求并发存活探测（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），按入口 ISP 过滤后随机 307 到节点；组不存在/无成员/全灭 → Worker local 兜底。
+- **未绑组 emby（node 模式）**：直接 Worker local（日志 `mode=local reason=no-group`）。
+- **本地代理**：Worker 直接 fetch 后端回传，隐藏客户端真实 IP，并对后端 302 / PlaybackInfo / M3U8 切片里的绝对 URL 做同源/跨域改写：同源改写为名称形式 `/emby/<name>/path`，跨域（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。
+- 全局模式切换（PUT `/admin/api/config`）只改 `config_meta.proxy_mode`，不写 `embys` 表，也不 bump version / fan-out（节点 snapshot 只含 path_prefix/backend_url，与模式无关）。
 
 ### 代理组路由（per-emby，仅 node 模式下生效）
 
-`proxy_mode = 'node'` 且 `embys.group_id` 非空时，该 emby 不走全局 `active_node_id`，改走组路由（`src/group.ts`）：
+`proxy_mode = 'node'` 且 `embys.group_id` 非空时，该 emby 走组路由（`src/group.ts`）；未绑组 emby 直接 Worker local：
 
 1. 取组内 node（`node_groups` 成员）；组不存在/无成员 → Worker local 兜底。
 2. 组内成员**每请求并发存活探测**（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），得存活集合。
-3. **入口网络判定**：`request.cf.asn` 查 `isp.ts` 表（未命中用 `asOrganization` 强关键字二次兜底），输出 ct/cu/cm/unknown。
-4. **软过滤 + 纯随机**：在存活集合里按 ISP 过滤（node 无标签 = 全兼容）；入口 unknown 不过滤；过滤后为空则回退组内全部存活 node（宁可错配不断流）；最后每请求纯随机挑一个，307 到该 node。
-5. **全灭兜底**：组内无存活 node → Worker local 代理兜底。组路由**不读写 `config_meta.active_node_id`**，与全局 failover/failback 完全隔离；cron 探活本就全量探测所有 node（与组无关），health 表天然覆盖组内成员。
+3. **入口网络判定**：`request.cf.asn` 查 `isp.ts` 表（未命中用 `asOrganization` 强关键字二次兜底），输出 ct/cu/cm/overseas。
+4. **软过滤 + 纯随机**：在存活集合里按 ISP 过滤（node 无标签 = 全兼容）；过滤后为空则回退组内全部存活 node（宁可错配不断流）；最后每请求纯随机挑一个，307 到该 node。
+5. **overseas（海外）入口**：只在标注 `overseas` 或未标注的 node 中选；组内无匹配 → **不回退其他 ISP node**，直接 Worker local。
+6. **全灭兜底**：组内无存活 node → Worker local 代理兜底。cron 探活本就全量探测所有 node（与组无关），health 表天然覆盖组内成员。
 
 全局模式（local/direct）优先于组：绑组 emby 在全局 local/direct 下仍走全局语义。
 

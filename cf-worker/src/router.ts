@@ -62,7 +62,7 @@ export async function handleClientRequest(
       return proxyLocal(request, target, emby.name, emby.backend_url);
   }
 
-  // case 'node': emby 绑定代理组 → 组内按入口网络过滤后纯随机；否则走全局 active_node_id
+  // case 'node': emby 绑定代理组 → 组内按入口网络过滤后纯随机；未绑组走下方 Worker local
   if (emby.group_id != null) {
     const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
     if (pick) {
@@ -81,7 +81,7 @@ export async function handleClientRequest(
         },
       });
     }
-    // 组不存在/无成员/全灭 → Worker local 兜底（不写 config_meta，与全局 failover 隔离）
+    // 组不存在/无成员/全灭 → Worker local 兜底
     console.log(
       `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=group-fallback reason=no-usable-node`,
     );

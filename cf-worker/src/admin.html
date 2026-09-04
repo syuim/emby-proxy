@@ -574,7 +574,7 @@
     <div id="modal-root"></div>
     <script>
       const $app = document.getElementById("app");
-      const state = { tab: (v => ["embys", "nodes", "groups"].includes(v) ? v : "embys")(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", activeNodeId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
+      const state = { tab: (v => ["embys", "nodes", "groups"].includes(v) ? v : "embys")(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -648,7 +648,6 @@
         state.groups = g.groups || [];
         state.health = h.nodes || {};
         state.proxyMode = c.proxy_mode || "node";
-        state.activeNodeId = c.active_node_id || "";
         state.diag = d || null;
         render();
       }
@@ -726,14 +725,22 @@
           }
           let badCount = 0;
           const lines = state.embys.map((e) => {
-            if (state.proxyMode === "direct") return `· ${e.name}：直连（不经代理）`;
-            if (state.proxyMode === "local" || !state.activeNodeId) return `· ${e.name}：Worker 代理`;
-            const ms = (h.nodes?.[state.activeNodeId]?.backend_latencies || {})[e.name];
+            if (state.proxyMode !== "node") {
+              return `· ${e.name}：${state.proxyMode === "direct" ? "直连（不经代理）" : "Worker 代理"}`;
+            }
+            if (e.group_id == null) return `· ${e.name}：Worker 代理（未绑组）`;
+            const memberIds = (state.groups.find((g) => g.id === e.group_id)?.node_ids) || [];
+            const pick = state.nodes.find((n) => memberIds.includes(n.id) && h.nodes?.[n.id]?.healthy);
+            if (!pick) {
+              badCount++;
+              return `· ${e.name}：组内节点不可达`;
+            }
+            const ms = (h.nodes?.[pick.id]?.backend_latencies || {})[e.name];
             if (ms == null || ms < 0) {
               badCount++;
               return `· ${e.name}：不可达`;
             }
-            return `· ${e.name}：${ms} ms`;
+            return `· ${e.name}（${pick.name}）：${ms} ms`;
           });
           toast(
             "节点 → 后端延迟\n" + lines.join("\n"),
@@ -1011,7 +1018,6 @@
                     ${paged.map((n, pi) => {
                       const h = state.health[n.id] || {};
                       const editing = state.editingNode === n.id;
-                      const gi = page * pageSize + pi;
                       if (editing) {
                         return `
                           <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
@@ -1044,8 +1050,6 @@
                           <td>${healthBadge(n.id)}</td>
                           <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
                           <td class="actions">
-                            <button class="btn btn-ghost" data-act="up" ${gi === 0 ? "disabled" : ""} title="上移">↑</button>
-                            <button class="btn btn-ghost" data-act="down" ${gi === state.nodes.length - 1 ? "disabled" : ""} title="下移">↓</button>
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
                             <button class="btn btn-danger" data-act="del">删除</button>
                           </td>
@@ -1073,8 +1077,6 @@
           const id = tr.dataset.id;
           const mode = tr.dataset.mode;
           if (mode === "view") {
-            tr.querySelector('[data-act="up"]').onclick = () => reorderNode(id, -1);
-            tr.querySelector('[data-act="down"]').onclick = () => reorderNode(id, 1);
             tr.querySelector('[data-act="edit"]').onclick = () => {
               state.editingNode = id;
               render();
@@ -1239,22 +1241,6 @@
           if (e.key === "Enter") root.querySelector("#gm-save").click();
         });
       }
-
-      async function reorderNode(id, dir) {
-        const ids = state.nodes.map((n) => n.id);
-        const i = ids.indexOf(id);
-        const j = i + dir;
-        if (i < 0 || j < 0 || j >= ids.length) return;
-        [ids[i], ids[j]] = [ids[j], ids[i]];
-        try {
-          await api("/emby/admin/api/nodes/reorder", {
-            method: "POST",
-            body: JSON.stringify({ ids }),
-          });
-          await refreshAll();
-        } catch (e) { toast(e.message, "err"); }
-      }
-
 
       // ---------- 弹窗 ----------
       function closeModal() {

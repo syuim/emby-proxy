@@ -51,14 +51,13 @@ export async function readNodes(env: Env): Promise<NodesKV> {
 
 export async function readConfigMeta(env: Env): Promise<ConfigMeta> {
   const res = await env.EMBY_DB.prepare(
-    "SELECT version, proxy_mode, active_node_id FROM config_meta WHERE id = 1",
-  ).first<{ version: number; proxy_mode: string; active_node_id: string }>();
+    "SELECT version, proxy_mode FROM config_meta WHERE id = 1",
+  ).first<{ version: number; proxy_mode: string }>();
   if (!res) {
-    return { proxy_mode: "node", active_node_id: "", version: 0 };
+    return { proxy_mode: "node", version: 0 };
   }
   return {
     proxy_mode: (res.proxy_mode as ConfigMeta["proxy_mode"]) || "node",
-    active_node_id: res.active_node_id ?? "",
     version: res.version,
   };
 }
