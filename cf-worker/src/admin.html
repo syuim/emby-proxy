@@ -1014,11 +1014,11 @@
             ${state.groups.length === 0
               ? '<div class="empty" style="padding:12px;"><div class="empty-icon">🗂</div>还没有代理组</div>'
               : state.groups.map((g) => `
-                  <div class="group-row" data-gid="${g.id}" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--color-border, rgba(128,128,128,.2));flex-wrap:wrap;">
-                    <strong style="min-width:110px;">${escapeHtml(g.name)}</strong>
-                    <span style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;flex:1;">
+                  <div class="group-row" data-gid="${g.id}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--color-border, rgba(128,128,128,.2));flex-wrap:wrap;">
+                    <strong style="min-width:110px;font-size:13px;">${escapeHtml(g.name)}</strong>
+                    <span style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;flex:1;">
                       ${state.nodes.map((n) => `
-                        <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin:0;">
+                        <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
                           <input type="checkbox" class="g-member" data-gid="${g.id}" data-nid="${escapeHtml(n.id)}" ${(g.node_ids || []).includes(n.id) ? "checked" : ""} />
                           ${escapeHtml(n.name)}
                         </label>
