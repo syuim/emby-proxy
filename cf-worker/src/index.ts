@@ -36,7 +36,7 @@ export default {
       if (/^https?(:\/\/|%3A)/i.test(rest)) {
         return handleDirectRequest(request, env);
       }
-      return handleClientRequest(request, env, ctx);
+      return handleClientRequest(request, env);
     }
 
     // 一级命名空间 /url：通用 URL 代理（任意 http(s) 资源，图片/API 均可）
