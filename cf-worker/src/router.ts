@@ -70,7 +70,7 @@ export async function handleClientRequest(
     const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
     if (pick) {
       console.log(
-        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=group group=${emby.group_id} node=${pick.node.id} alive=${pick.aliveSize} pool=${pick.poolSize}`,
+        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=group group=${emby.group_id} node=${pick.node.name} alive=${pick.aliveSize} pool=${pick.poolSize}`,
       );
       // 节点协议路径不含 /emby 前缀：/<name>/subpath
       const nodeTarget = buildTargetUrl(pick.node.public_url, "/" + emby.name + subpath, url.search);
@@ -100,7 +100,7 @@ export async function handleClientRequest(
 
   // 节点协议路径不含 /emby 前缀：/<name>/subpath
   console.log(
-    `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=node node=${node.id}`,
+    `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=node node=${node.name}`,
   );
   const nodeTarget = buildTargetUrl(node.public_url, "/" + emby.name + subpath, url.search);
 
