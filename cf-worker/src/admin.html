@@ -793,7 +793,7 @@
                 <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
                 <button data-tab="groups" class="${state.tab === "groups" ? "active" : ""}">代理组</button>
               </div>
-              <div class="mode-selector" title="全局模式；Node 档下，绑定代理组的 emby 走组内网络匹配 + 随机，未绑组的走全局节点"> 
+              <div class="mode-selector" title="全局模式；Node 档下，绑定代理组的 emby 走组内网络匹配 + 随机，未绑组的走 Worker 本地代理"> 
                 <label class="mode-label">模式</label>
                 <select id="proxy-mode-select">
                   <option value="node" ${state.proxyMode === "node" ? "selected" : ""}>Node 代理</option>
@@ -1165,7 +1165,7 @@
           tr.querySelector('[data-act="del"]').onclick = async () => {
             const g = state.groups.find((x) => x.id === gid);
             if (!g) return;
-            if (!confirm(`确认删除组 '${g.name}'？绑定的 emby 将回到全局节点模式`)) return;
+            if (!confirm(`确认删除组 '${g.name}'？绑定的 emby 将回到 Worker 本地代理`)) return;
             try {
               await api("/emby/admin/api/groups/" + gid, { method: "DELETE" });
               toast("已删除组", "ok");

@@ -169,56 +169,16 @@ export async function handleUpdateNode(
 }
 
 export async function handleDeleteNode(env: Env, id: string): Promise<Response> {
-  const [nodes, embys] = await Promise.all([readNodes(env), readEmbys(env)]);
-  const target = nodes.nodes.find((n) => n.id === id);
-  if (!target) return json(404, { error: "节点不存在" });
-
-  const otherNodes = nodes.nodes
-    .filter((n) => n.id !== id)
-    .sort((a, b) => a.sort_order - b.sort_order);
-  const fallbackNode = otherNodes[0] ?? null;
-
-  const refs = embys.embys.filter(
-    (e) => e.node_id === id || e.home_node_id === id,
-  );
-
-  const stmts: D1PreparedStatement[] = [];
-
-  let embysChanged = false;
-  if (refs.length > 0) {
-    // node_id 与 home_node_id 分开解引用：故障转移到其他节点的 emby 只需改 home
-    const fallbackId = fallbackNode?.id ?? "";
-    stmts.push(
-      env.EMBY_DB.prepare("UPDATE embys SET node_id = ? WHERE node_id = ?").bind(
-        fallbackId, id,
-      ),
-      env.EMBY_DB.prepare(
-        "UPDATE embys SET home_node_id = ? WHERE home_node_id = ?",
-      ).bind(fallbackId, id),
-    );
-    stmts.push(
-      env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
-    );
-    embysChanged = true;
+  const nodes = await readNodes(env);
+  if (!nodes.nodes.some((n) => n.id === id)) {
+    return json(404, { error: "节点不存在" });
   }
-
-  // 清理组关联
-  stmts.push(env.EMBY_DB.prepare("DELETE FROM node_groups WHERE node_id = ?").bind(id));
-
-  stmts.push(env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id));
-
-  await env.EMBY_DB.batch(stmts);
-
-  if (embysChanged) {
-    const freshEmbys = await readEmbys(env);
-    const push = await pushSnapshotToAll(
-      otherNodes,
-      buildSnapshot(freshEmbys),
-      env.EMBY_SYNC_TOKEN,
-      "delete-node",
-    );
-    return json(200, { ok: true, reassigned: refs.length, push_results: push });
-  }
+  // 只清组关联与节点记录；embys.node_id/home_node_id 解引用已随全局节点机制移除，
+  // health 残留行由 cron 的 staleIds 清理
+  await env.EMBY_DB.batch([
+    env.EMBY_DB.prepare("DELETE FROM node_groups WHERE node_id = ?").bind(id),
+    env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id),
+  ]);
   return json(200, { ok: true });
 }
 
