@@ -13,9 +13,8 @@ export function classifyClientIsp(request: Request): IspClass {
 
 export interface GroupPick {
   node: NodeRecord;
-  aliveSize: number;
-  poolSize: number;
-  // true = 组内存在匹配入口 ISP 的 node；false = ISP 无匹配，回退组内全池
+  aliveNames: string[];
+  poolNames: string[];
   ispMatched: boolean;
 }
 
@@ -64,8 +63,8 @@ export async function chooseNodeFromGroup(
   const pick = pool[Math.floor(Math.random() * pool.length)]!;
   return {
     node: pick,
-    aliveSize: alive.length,
-    poolSize: pool.length,
+    aliveNames: alive.map((n) => n.name),
+    poolNames: pool.map((n) => n.name),
     ispMatched: matched,
   };
 }
