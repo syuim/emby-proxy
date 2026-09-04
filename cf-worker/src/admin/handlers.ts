@@ -407,15 +407,37 @@ export async function handleCreateGroup(req: JsonRequest, env: Env): Promise<Res
   if (!v || v.length > GROUP_NAME_MAX) {
     return json(400, { error: `组名必填且不超过 ${GROUP_NAME_MAX} 字符` });
   }
-  const groups = await readGroups(env);
+  const [groups, nodes] = await Promise.all([readGroups(env), readNodes(env)]);
   if (groups.some((g) => g.name === v)) {
     return json(400, { error: `组 '${v}' 已存在` });
   }
-  const res = await env.EMBY_DB.prepare(
-    "INSERT INTO proxy_groups(name, created_at) VALUES(?,?)",
-  ).bind(v, new Date().toISOString()).run();
-  const id = Number(res.meta.last_row_id);
-  return json(201, { ok: true, group: { id, name: v, created_at: "", node_ids: [] } });
+  let nodeIds: string[] = [];
+  if (req.body?.node_ids !== undefined) {
+    if (!Array.isArray(req.body.node_ids) || req.body.node_ids.some((x: unknown) => typeof x !== "string")) {
+      return json(400, { error: "node_ids 必须是节点 id 数组" });
+    }
+    const known = new Set(nodes.nodes.map((n) => n.id));
+    const unknown = req.body.node_ids.filter((x: string) => !known.has(x));
+    if (unknown.length > 0) {
+      return json(400, { error: `未知节点: ${unknown.join(", ")}` });
+    }
+    nodeIds = req.body.node_ids as string[];
+  }
+  const stmts: D1PreparedStatement[] = [
+    env.EMBY_DB.prepare(
+      "INSERT INTO proxy_groups(name, created_at) VALUES(?,?)",
+    ).bind(v, new Date().toISOString()),
+  ];
+  for (const nid of nodeIds) {
+    stmts.push(
+      env.EMBY_DB.prepare(
+        "INSERT INTO node_groups(node_id, group_id) VALUES(?, (SELECT id FROM proxy_groups WHERE name = ?))",
+      ).bind(nid, v),
+    );
+  }
+  await env.EMBY_DB.batch(stmts);
+  const created = (await readGroups(env)).find((g) => g.name === v);
+  return json(201, { ok: true, group: { ...created!, node_ids: nodeIds } });
 }
 
 export async function handleUpdateGroup(

@@ -574,7 +574,7 @@
     <div id="modal-root"></div>
     <script>
       const $app = document.getElementById("app");
-      const state = { tab: localStorage.getItem("emby-router-tab") === "nodes" ? "nodes" : "embys", nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", activeNodeId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
+      const state = { tab: (v => ["embys", "nodes", "groups"].includes(v) ? v : "embys")(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", activeNodeId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -784,6 +784,7 @@
               <div class="tabs">
                 <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
                 <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
+                <button data-tab="groups" class="${state.tab === "groups" ? "active" : ""}">代理组</button>
               </div>
               <div class="mode-selector" title="全局模式；Node 档下，绑定代理组的 emby 走组内网络匹配 + 随机，未绑组的走全局节点"> 
                 <label class="mode-label">模式</label>
@@ -793,7 +794,7 @@
                   <option value="direct" ${state.proxyMode === "direct" ? "selected" : ""}>直连</option>
                 </select>
               </div>
-              <button class="btn btn-primary" id="btn-add">${state.tab === "embys" ? "+ Emby" : "+ 节点"}</button>
+              <button class="btn btn-primary" id="btn-add">${state.tab === "embys" ? "+ Emby" : state.tab === "groups" ? "+ 组" : "+ 节点"}</button>
             </div>
             <div id="tab-content"></div>
           </main>
@@ -827,10 +828,12 @@
         }
         $app.querySelector("#btn-add").onclick = () => {
           if (state.tab === "embys") openAddEmbyModal();
+          else if (state.tab === "groups") openGroupModal(null);
           else openAddNodeModal();
         };
         if (state.tab === "embys") renderEmbys();
-        else if (state.tab === "nodes") renderNodes();
+        else if (state.tab === "groups") renderGroups();
+        else renderNodes();
       }
 
       function renderLogin() {
@@ -888,7 +891,14 @@
                           <tr data-name="${escapeHtml(e.name)}" data-mode="edit">
                             <td><input class="row-name" value="${escapeHtml(e.name)}" /></td>
                             <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
-                            <td>${groupName(e.group_id) ?? '<span class="badge unknown">全局</span>'}</td>
+                            <td>
+                              <select class="row-group">
+                                <option value="">未绑定（全局节点）</option>
+                                ${state.groups.map((g) =>
+                                  `<option value="${g.id}" ${String(e.group_id) === String(g.id) ? "selected" : ""}>${escapeHtml(g.name)}</option>`
+                                ).join("")}
+                              </select>
+                            </td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
                               <button class="btn btn-ghost" data-act="cancel">取消</button>
@@ -896,18 +906,13 @@
                           </tr>
                         `;
                       }
+                      const gid = e.group_id;
+                      const gname = groupName(gid);
                       return `
                         <tr data-name="${escapeHtml(e.name)}" data-mode="view">
                           <td><strong>${escapeHtml(e.name)}</strong></td>
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
-                          <td>
-                            <select class="row-group" data-name="${escapeHtml(e.name)}">
-                              <option value="">未绑定（全局节点）</option>
-                              ${state.groups.map((g) =>
-                                `<option value="${g.id}" ${String(e.group_id) === String(g.id) ? "selected" : ""}>${escapeHtml(g.name)}</option>`
-                              ).join("")}
-                            </select>
-                          </td>
+                          <td>${gname ? `<span class="badge" style="border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-text);">${escapeHtml(gname)}</span>` : '<span class="badge unknown">未绑定</span>'}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
                             <button class="btn btn-danger" data-act="del">删除</button>
@@ -937,24 +942,6 @@
           const mode = tr.dataset.mode;
 
           if (mode === "view") {
-            const $group = tr.querySelector(".row-group");
-            if ($group) {
-              $group.onchange = async () => {
-                const v = $group.value;
-                const gid = v === "" ? null : Number(v);
-                try {
-                  await api("/emby/admin/api/embys/" + encodeURIComponent(name), {
-                    method: "PUT",
-                    body: JSON.stringify({ group_id: gid }),
-                  });
-                  toast(gid == null ? `已解除组绑定：${name}` : `已绑定组：${groupName(gid)}`, "ok");
-                  await refreshAll();
-                } catch (e) {
-                  toast(e.message, "err");
-                  await refreshAll();
-                }
-              };
-            }
             tr.querySelector('[data-act="edit"]').onclick = () => {
               state.editingEmby = name;
               render();
@@ -973,10 +960,12 @@
               const newName = tr.querySelector(".row-name").value.trim();
               const newBackend = $backend.value.trim();
               if (!newBackend) { toast("backend_url 不能为空", "err"); return; }
+              const $group = tr.querySelector(".row-group");
+              const groupId = $group && $group.value !== "" ? Number($group.value) : null;
               try {
                 await api("/emby/admin/api/embys/" + encodeURIComponent(name), {
                   method: "PUT",
-                  body: JSON.stringify({ name: newName, backend_url: newBackend }),
+                  body: JSON.stringify({ name: newName, backend_url: newBackend, group_id: groupId }),
                 });
                 toast(`已保存并推送：${newName}`, "ok");
                 state.editingEmby = null;
@@ -1001,32 +990,6 @@
         const paged = state.nodes.slice(page * pageSize, (page + 1) * pageSize);
 
         c.innerHTML = `
-          <div class="panel">
-            <div class="toolbar">
-              <h2>代理组</h2>
-              <span class="hint">绑定组后 emby 按入口网络（电信/联通/移动）匹配组内 node 随机负载；未标注网络的 node 任何网络可选</span>
-            </div>
-            <div class="toolbar" style="margin-bottom:10px;">
-              <input id="g-name" placeholder="新组名" style="max-width:200px;" />
-              <button class="btn btn-primary" id="g-add">+ 组</button>
-            </div>
-            ${state.groups.length === 0
-              ? '<div class="empty" style="padding:12px;"><div class="empty-icon">🗂</div>还没有代理组</div>'
-              : state.groups.map((g) => `
-                  <div class="group-row" data-gid="${g.id}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--color-border, rgba(128,128,128,.2));flex-wrap:wrap;">
-                    <strong style="min-width:110px;font-size:13px;">${escapeHtml(g.name)}</strong>
-                    <span style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;flex:1;">
-                      ${state.nodes.map((n) => `
-                        <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
-                          <input type="checkbox" class="g-member" data-gid="${g.id}" data-nid="${escapeHtml(n.id)}" ${(g.node_ids || []).includes(n.id) ? "checked" : ""} />
-                          ${escapeHtml(n.name)}
-                        </label>
-                      `).join("")}
-                    </span>
-                    <button class="btn btn-danger btn-sm" data-act="del-group" data-gid="${g.id}">删除</button>
-                  </div>
-                `).join("")}
-          </div>
           <div class="panel">
             <div class="toolbar">
               <h2>节点列表</h2>
@@ -1100,49 +1063,6 @@
         c.querySelector("#h-sync").onclick = resyncAndReport;
         c.querySelector("#n-probe").onclick = probeAndReport;
 
-        // 代理组：创建 / 成员勾选 / 删除
-        const $gName = c.querySelector("#g-name");
-        c.querySelector("#g-add").onclick = async () => {
-          const name = ($gName.value || "").trim();
-          if (!name) { toast("组名不能为空", "err"); return; }
-          try {
-            await api("/emby/admin/api/groups", { method: "POST", body: JSON.stringify({ name }) });
-            toast(`已创建组：${name}`, "ok");
-            await refreshAll();
-          } catch (e) { toast(e.message, "err"); }
-        };
-        $gName.addEventListener("keydown", (e) => { if (e.key === "Enter") c.querySelector("#g-add").click(); });
-        c.querySelectorAll(".g-member").forEach((cb) => {
-          cb.onchange = async () => {
-            const gid = Number(cb.dataset.gid);
-            const ids = Array.from(c.querySelectorAll(`.g-member[data-gid="${gid}"]`))
-              .filter((x) => x.checked)
-              .map((x) => x.dataset.nid);
-            try {
-              await api("/emby/admin/api/groups/" + gid, {
-                method: "PUT",
-                body: JSON.stringify({ node_ids: ids }),
-              });
-              toast(`已更新组成员（${ids.length} 个节点）`, "ok");
-            } catch (e) { toast(e.message, "err"); }
-            const g = state.groups.find((x) => x.id === gid);
-            if (g) g.node_ids = ids;
-          };
-        });
-        c.querySelectorAll('[data-act="del-group"]').forEach((btn) => {
-          btn.onclick = async () => {
-            const gid = Number(btn.dataset.gid);
-            const g = state.groups.find((x) => x.id === gid);
-            if (!g) return;
-            if (!confirm(`确认删除组 '${g.name}'？绑定的 emby 将回到全局节点模式`)) return;
-            try {
-              await api("/emby/admin/api/groups/" + gid, { method: "DELETE" });
-              toast("已删除组", "ok");
-              await refreshAll();
-            } catch (e) { toast(e.message, "err"); }
-          };
-        });
-
         const nprev = c.querySelector("#nprev");
         if (nprev) nprev.onclick = () => { state.nodePage--; render(); };
         const nnext = c.querySelector("#nnext");
@@ -1191,6 +1111,131 @@
               render();
             };
           }
+        });
+      }
+
+      // ---------- 代理组（独立 Tab，样式与节点/emby 一致） ----------
+      function renderGroups() {
+        const c = $app.querySelector("#tab-content");
+        c.innerHTML = `
+          <div class="panel">
+            <div class="toolbar">
+              <h2>代理组列表</h2>
+              <span class="hint">绑定组后 emby 按入口网络（电信/联通/移动）匹配组内 node 随机负载；未标注网络的 node 任何网络可选</span>
+            </div>
+            ${state.groups.length === 0
+              ? '<div class="empty"><div class="empty-icon">🗂</div>还没有代理组</div>'
+              : `<div class="table-wrap"><table>
+                  <thead><tr>
+                    <th>组名</th><th>成员节点</th><th>创建时间</th><th class="col-actions">操作</th>
+                  </tr></thead>
+                  <tbody>
+                    ${state.groups.map((g) => {
+                      const members = (g.node_ids || [])
+                        .map((id) => state.nodes.find((n) => n.id === id))
+                        .filter(Boolean);
+                      return `
+                        <tr data-gid="${g.id}">
+                          <td><strong>${escapeHtml(g.name)}</strong></td>
+                          <td style="max-width:520px;">${members.length === 0
+                            ? '<span class="badge unknown">无成员</span>'
+                            : members.map((n) => `<span class="badge" style="${ISP_CHIP_STYLE}">${escapeHtml(n.name)}</span>`).join(" ")}</td>
+                          <td title="${escapeHtml(g.created_at)}">${escapeHtml(relTime(g.created_at))}</td>
+                          <td class="actions">
+                            <button class="btn btn-ghost" data-act="edit">编辑</button>
+                            <button class="btn btn-danger" data-act="del">删除</button>
+                          </td>
+                        </tr>
+                      `;
+                    }).join("")}
+                  </tbody>
+                </table></div>`
+            }
+          </div>
+        `;
+        c.querySelectorAll("tbody tr").forEach((tr) => {
+          const gid = Number(tr.dataset.gid);
+          tr.querySelector('[data-act="edit"]').onclick = () => {
+            const g = state.groups.find((x) => x.id === gid);
+            if (g) openGroupModal(g);
+          };
+          tr.querySelector('[data-act="del"]').onclick = async () => {
+            const g = state.groups.find((x) => x.id === gid);
+            if (!g) return;
+            if (!confirm(`确认删除组 '${g.name}'？绑定的 emby 将回到全局节点模式`)) return;
+            try {
+              await api("/emby/admin/api/groups/" + gid, { method: "DELETE" });
+              toast("已删除组", "ok");
+              await refreshAll();
+            } catch (e) { toast(e.message, "err"); }
+          };
+        });
+      }
+
+      // 添加/编辑组弹窗：编辑态点保存才生效
+      function openGroupModal(group) {
+        const root = document.getElementById("modal-root");
+        const isEdit = !!group;
+        root.innerHTML = `
+          <div class="modal-overlay">
+            <div class="modal">
+              <div class="modal-header">
+                <h3>${isEdit ? "编辑组" : "添加组"}</h3>
+                <button class="btn btn-icon" data-close>✕</button>
+              </div>
+              <div class="modal-body">
+                <div class="field">
+                  <label>组名</label>
+                  <input id="gm-name" value="${isEdit ? escapeHtml(group.name) : ""}" placeholder="例如 main" autofocus />
+                </div>
+                <div class="field">
+                  <label>成员节点 <span class="hint">可多选；勾选后该组只在这些 node 上负载均衡</span></label>
+                  ${state.nodes.length === 0
+                    ? '<p class="hint" style="margin:0;">暂无节点，请先到 Nodes 页添加</p>'
+                    : `<div style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;">
+                        ${state.nodes.map((n) => `
+                          <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
+                            <input type="checkbox" class="gm-member" data-nid="${escapeHtml(n.id)}" ${isEdit && (group.node_ids || []).includes(n.id) ? "checked" : ""} />
+                            ${escapeHtml(n.name)}
+                          </label>
+                        `).join("")}
+                      </div>`}
+                </div>
+                <div class="modal-footer">
+                  <button class="btn btn-ghost" data-close>取消</button>
+                  <button class="btn btn-primary" id="gm-save">保存</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        wireModal(root);
+        root.querySelector("#gm-save").onclick = async () => {
+          const name = (root.querySelector("#gm-name").value || "").trim();
+          if (!name) { toast("组名不能为空", "err"); return; }
+          const nodeIds = Array.from(root.querySelectorAll(".gm-member"))
+            .filter((x) => x.checked)
+            .map((x) => x.dataset.nid);
+          try {
+            if (isEdit) {
+              await api("/emby/admin/api/groups/" + group.id, {
+                method: "PUT",
+                body: JSON.stringify({ name, node_ids: nodeIds }),
+              });
+              toast(`已保存组：${name}`, "ok");
+            } else {
+              await api("/emby/admin/api/groups", {
+                method: "POST",
+                body: JSON.stringify({ name, node_ids: nodeIds }),
+              });
+              toast(`已创建组：${name}`, "ok");
+            }
+            closeModal();
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+        root.querySelector("#gm-name").addEventListener("keydown", (e) => {
+          if (e.key === "Enter") root.querySelector("#gm-save").click();
         });
       }
 
@@ -1286,10 +1331,10 @@
                 </div>
                 <div class="field">
                   <label>适合网络 <span class="hint">可多选；不选 = 任何网络均可服务</span></label>
-                  <div style="display:flex;gap:14px;">
-                    <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp-new" value="ct" />电信</label>
-                    <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp-new" value="cu" />联通</label>
-                    <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp-new" value="cm" />移动</label>
+                  <div style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;">
+                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;"><input type="checkbox" class="n-isp-new" value="ct" />电信</label>
+                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;"><input type="checkbox" class="n-isp-new" value="cu" />联通</label>
+                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;"><input type="checkbox" class="n-isp-new" value="cm" />移动</label>
                   </div>
                 </div>
                 <div class="modal-footer">
