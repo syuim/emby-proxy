@@ -15,7 +15,6 @@ export interface GroupPick {
   node: NodeRecord;
   aliveNames: string[];
   poolNames: string[];
-  ispMatched: boolean;
 }
 
 export interface GroupPool {
@@ -66,6 +65,5 @@ export async function chooseNodeFromGroup(
     node: pick,
     aliveNames: alive.map((n) => n.name),
     poolNames: pool.map((n) => n.name),
-    ispMatched: matched,
   };
 }

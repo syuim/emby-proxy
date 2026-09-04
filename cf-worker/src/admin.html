@@ -679,7 +679,6 @@
         return `<span class="badge" title="ASN ${d.asn ?? "-"} · ${escapeHtml(d.as_organization || "")}" style="${ISP_CHIP_STYLE}">入口:${label}${d.asn ? ` · AS${d.asn}` : ""}</span>`;
       }
       function healthBadge(nodeId) {
-        if (nodeId === "local") return '<span class="badge ok">本地</span>';
         const h = state.health[nodeId];
         if (!h) return '<span class="badge unknown">未检测</span>';
         if (h.healthy) return '<span class="badge ok">健康</span>';

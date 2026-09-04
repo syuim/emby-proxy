@@ -96,11 +96,10 @@ describe("chooseNodeFromGroup", () => {
       const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
       expect(pick).not.toBeNull();
       expect(["n-ct", "n-any"]).toContain(pick!.node.id);
-      expect(pick!.ispMatched).toBe(true);
     }
   });
 
-  it("匹配 ISP 的 node 全不健康 → 回退组内其它存活 node（ispMatched=false）", async () => {
+  it("匹配 ISP 的 node 全不健康 → 回退组内其它存活 node", async () => {
     const env = stubEnv(1, ["n-ct", "n-cu"]);
     // 只有 cu 存活，ct 节点已挂
     mockNodeHealth(new Set(["n-cu"]));
@@ -108,7 +107,6 @@ describe("chooseNodeFromGroup", () => {
     const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
     expect(pick).not.toBeNull();
     expect(pick!.node.id).toBe("n-cu");
-    expect(pick!.ispMatched).toBe(false);
   });
 
   it("组内 node 全灭 → null", async () => {
@@ -147,6 +145,5 @@ describe("chooseNodeFromGroup", () => {
     const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
     expect(pick).not.toBeNull();
     expect(pick!.node.id).toBe("n-overseas");
-    expect(pick!.ispMatched).toBe(true);
   });
 });
