@@ -3,13 +3,14 @@ import { __resetAliveCacheForTests } from "./alive";
 import { chooseNodeFromGroup, filterGroupPool } from "./group";
 import type { Env, NodeRecord } from "./types";
 
-function makeNode(id: string, ispTags: string[] = []): NodeRecord {
+function makeNode(id: string, ispTags: string[] = [], disabled = false): NodeRecord {
   return {
     id,
     name: id,
     public_url: `https://${id}.example.com`,
     created_at: "2026-01-01T00:00:00Z",
     isp_tags: ispTags,
+    disabled,
   };
 }
 
@@ -112,6 +113,24 @@ describe("chooseNodeFromGroup", () => {
     const env = stubEnv(1, ["n-ct", "n-cu"]);
     mockNodeHealth(new Set());
     const nodes = [makeNode("n-ct", ["ct"]), makeNode("n-cu", ["cu"])];
+    expect(await chooseNodeFromGroup(env, 1, nodes, "ct")).toBeNull();
+  });
+
+  it("禁用的 node 视为不可达：即使服务健康也不选中", async () => {
+    const env = stubEnv(1, ["n-disabled", "n-ok"]);
+    mockNodeHealth(new Set(["n-disabled", "n-ok"])); // 探测角度看两者都在线
+    const nodes = [makeNode("n-disabled", [], true), makeNode("n-ok", [])];
+    for (let i = 0; i < 20; i++) {
+      const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+      expect(pick).not.toBeNull();
+      expect(pick!.node.id).toBe("n-ok");
+    }
+  });
+
+  it("组内 node 全部被禁用 → null（Worker local 兜底）", async () => {
+    const env = stubEnv(1, ["n-disabled"]);
+    mockNodeHealth(new Set(["n-disabled"]));
+    const nodes = [makeNode("n-disabled", [], true)];
     expect(await chooseNodeFromGroup(env, 1, nodes, "ct")).toBeNull();
   });
 

@@ -72,10 +72,13 @@ export async function runHealthCycle(
     return;
   }
 
+  // 禁用的节点跳过探测（视为不可达，health 残留行由 UI 特判展示）
   const outcomes = await Promise.all(
-    nodesKV.nodes.map((n) =>
-      probeNode(n, env.EMBY_SYNC_TOKEN, prevHealth.nodes[n.id] ?? emptyNodeHealth(), force),
-    ),
+    nodesKV.nodes
+      .filter((n) => !n.disabled)
+      .map((n) =>
+        probeNode(n, env.EMBY_SYNC_TOKEN, prevHealth.nodes[n.id] ?? emptyNodeHealth(), force),
+      ),
   );
 
   const newHealth: HealthKV = {

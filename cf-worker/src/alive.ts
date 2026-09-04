@@ -9,6 +9,9 @@ const ALIVE_TTL_OK_MS = 30_000;
 const ALIVE_TTL_FAIL_MS = 15_000;
 
 export async function probeAlive(node: NodeRecord): Promise<boolean> {
+  // 禁用 = 不可达：不探测也不写缓存，恢复启用即刻生效（无 TTL 残留）
+  if (node.disabled) return false;
+
   const hit = aliveCache.get(node.id);
   if (hit && Date.now() - hit.ts < (hit.alive ? ALIVE_TTL_OK_MS : ALIVE_TTL_FAIL_MS)) {
     return hit.alive;

@@ -87,6 +87,7 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionCo
     public_url: trimmed.public_url,
     created_at: new Date().toISOString(),
     isp_tags: ispTags ?? [],
+    disabled: false,
   };
   nodes.nodes.push(newNode);
   const stmts: D1PreparedStatement[] = [
@@ -116,8 +117,15 @@ export async function handleUpdateNode(
   if (!node) return json(404, { error: "节点不存在" });
 
   let changed = false;
-  let configChanged = false; // name/public_url 变化影响探活与推送；isp_tags 只影响 Worker 路由
-  const { name, public_url } = req.body ?? {};
+  let configChanged = false; // name/public_url 变化影响探活与推送；isp_tags/disabled 只影响 Worker 路由
+  const { name, public_url, disabled } = req.body ?? {};
+  if (disabled !== undefined && typeof disabled !== "boolean") {
+    return json(400, { error: "disabled 必须是布尔值" });
+  }
+  if (typeof disabled === "boolean" && disabled !== node.disabled) {
+    node.disabled = disabled;
+    changed = true;
+  }
   if (typeof name === "string" && name.trim()) {
     const v = name.trim();
     if (nodes.nodes.some((n) => n.id !== id && n.name === v)) {
@@ -142,24 +150,27 @@ export async function handleUpdateNode(
       configChanged = true;
     }
   }
-  const ispTags = parseIspTagsInput(req.body?.isp_tags);
-  if (ispTags === null) {
-    return json(400, { error: "isp_tags 只能包含 ct / cu / cm / overseas" });
-  }
-  if (ispTags !== null && JSON.stringify(ispTags) !== JSON.stringify(node.isp_tags)) {
-    node.isp_tags = ispTags;
-    changed = true;
+  // isp_tags 可选：未传不更新（部分更新语义，与 name/public_url/disabled 一致）
+  if (req.body?.isp_tags !== undefined) {
+    const ispTags = parseIspTagsInput(req.body.isp_tags);
+    if (ispTags === null) {
+      return json(400, { error: "isp_tags 只能包含 ct / cu / cm / overseas" });
+    }
+    if (JSON.stringify(ispTags) !== JSON.stringify(node.isp_tags)) {
+      node.isp_tags = ispTags;
+      changed = true;
+    }
   }
   if (!changed) return json(200, { ok: true, node, skipped: true });
   const stmts: D1PreparedStatement[] = [
     env.EMBY_DB.prepare(
-      "UPDATE nodes SET name = ?, public_url = ?, isp_tags = ? WHERE id = ?",
-    ).bind(node.name, node.public_url, JSON.stringify(node.isp_tags), id),
+      "UPDATE nodes SET name = ?, public_url = ?, isp_tags = ?, disabled = ? WHERE id = ?",
+    ).bind(node.name, node.public_url, JSON.stringify(node.isp_tags), node.disabled ? 1 : 0, id),
   ];
   await env.EMBY_DB.batch(stmts);
   // 节点 URL 变更不影响 emby 配置（节点上仍是同一份 snapshot），
   // 但探活/推送会指向新地址，故推一次让各节点版本对齐、触发 cron 用新 URL 探测。
-  // isp_tags 仅 Worker 路由使用，不进入 sync 协议，单独变更无需推送。
+  // isp_tags/disabled 仅 Worker 路由使用，不进入 sync 协议，单独变更无需推送。
   if (configChanged) {
     const push = await fanoutPush(env, await readEmbys(env), nodes, "update-node");
     return json(200, { ok: true, node, push_results: push });
@@ -471,13 +482,16 @@ async function fanoutPush(
   nodes: NodesKV,
   trigger: string,
 ): Promise<PushResult[]> {
-  if (nodes.nodes.length === 0) {
-    console.log(`[sync] fanout skipped trigger=${trigger} reason=no-nodes`);
+  // 禁用的节点不参与推送；禁用期间 emby 配置变化无需推给它，
+  // 恢复启用后 cron 探测发现版本落后会自动补推
+  const targets = nodes.nodes.filter((n) => !n.disabled);
+  if (targets.length === 0) {
+    console.log(`[sync] fanout skipped trigger=${trigger} reason=no-enabled-nodes`);
     return [];
   }
   const snapshot = buildSnapshot(embys);
   const results = await pushSnapshotToAll(
-    nodes.nodes,
+    targets,
     snapshot,
     env.EMBY_SYNC_TOKEN,
     trigger,

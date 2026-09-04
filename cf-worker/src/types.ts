@@ -5,6 +5,8 @@ export interface NodeRecord {
   created_at: string;
   // 适合的网络标签（'ct' 电信 / 'cu' 联通 / 'cm' 移动 / 'overseas' 海外），空数组 = 任何网络可选
   isp_tags: string[];
+  // 手动禁用：视为不可达，不参与组路由 / 探活 / 配置推送
+  disabled: boolean;
 }
 
 export interface NodesKV {

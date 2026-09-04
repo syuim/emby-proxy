@@ -685,6 +685,11 @@
         if (h.healthy) return '<span class="badge ok">健康</span>';
         return '<span class="badge bad">异常</span>';
       }
+      // 禁用的节点视为不可达，状态列不再引用探测结果
+      function statusBadge(node) {
+        if (node.disabled) return '<span class="badge unknown">已禁用</span>';
+        return healthBadge(node.id);
+      }
 
       // 延迟/同步错误等明细不进表格，由探测 toast 承载
       function clip(s, n) {
@@ -695,7 +700,13 @@
         try {
           const h = await api("/emby/admin/api/probe", { method: "POST" });
           await refreshAll();
-          const entries = Object.entries(h.nodes || {});
+          // 禁用节点不参与探测，残留的旧 health 不计入结果
+          const disabledIds = new Set(
+            state.nodes.filter((n) => n.disabled).map((n) => n.id)
+          );
+          const entries = Object.entries(h.nodes || {}).filter(
+            ([id]) => !disabledIds.has(id)
+          );
           if (entries.length === 0) {
             toast("探测完成：暂无节点", "ok");
             return;
@@ -985,7 +996,7 @@
                               <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;"><input type="checkbox" class="n-isp" value="cm" ${(n.isp_tags || []).includes("cm") ? "checked" : ""} />移动</label>
                               <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="overseas" ${(n.isp_tags || []).includes("overseas") ? "checked" : ""} />海外</label>
                             </td>
-                            <td>${healthBadge(n.id)}</td>
+                            <td>${statusBadge(n)}</td>
                             <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
@@ -1001,9 +1012,10 @@
                           </div></td>
                           <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
                           <td>${ispBadges(n.isp_tags)}</td>
-                          <td>${healthBadge(n.id)}</td>
+                          <td>${statusBadge(n)}</td>
                           <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
                           <td class="actions">
+                            <button class="btn btn-ghost" data-act="toggle">${n.disabled ? "启用" : "禁用"}</button>
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
                             <button class="btn btn-danger" data-act="del">删除</button>
                           </td>
@@ -1036,6 +1048,19 @@
           const id = tr.dataset.id;
           const mode = tr.dataset.mode;
           if (mode === "view") {
+            tr.querySelector('[data-act="toggle"]').onclick = async () => {
+              const node = state.nodes.find((x) => x.id === id);
+              if (!node) return;
+              const next = !node.disabled;
+              try {
+                await api("/emby/admin/api/nodes/" + encodeURIComponent(id), {
+                  method: "PUT",
+                  body: JSON.stringify({ disabled: next }),
+                });
+                toast(next ? "已禁用节点" : "已启用节点", "ok");
+                await refreshAll();
+              } catch (e) { toast(e.message, "err"); }
+            };
             tr.querySelector('[data-act="edit"]').onclick = () => {
               state.editingNode = id;
               render();
@@ -1162,7 +1187,7 @@
                         ${state.nodes.map((n) => `
                           <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
                             <input type="checkbox" class="gm-member" data-nid="${escapeHtml(n.id)}" ${isEdit && (group.node_ids || []).includes(n.id) ? "checked" : ""} />
-                            ${escapeHtml(n.name)}
+                            ${escapeHtml(n.name)}${n.disabled ? ' <span class="hint">(已禁用)</span>' : ""}
                           </label>
                         `).join("")}
                       </div>`}
