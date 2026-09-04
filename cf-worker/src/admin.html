@@ -394,10 +394,10 @@
       .login-card .btn-primary { width: 100%; padding: 11px; }
 
       /* ============ Tabs row (tabs + add button) ============ */
-      .tabs-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+      .tabs-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; row-gap: 8px; }
       .tabs-row .tabs { margin-bottom: 0; }
-      .mode-selector { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-      .mode-label { font-size: 12px; color: var(--color-text-dim); }
+      .mode-selector { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; }
+      .mode-label { font-size: 12px; color: var(--color-text-dim); white-space: nowrap; }
       .mode-selector select {
         padding: 6px 10px;
         border-radius: var(--radius-sm);
@@ -405,6 +405,7 @@
         background: var(--color-surface);
         color: var(--color-text);
         font-size: 13px;
+        white-space: nowrap;
       }
 
       /* ============ Modal ============ */
@@ -795,7 +796,7 @@
               <div class="mode-selector" title="全局模式；Node 档下，绑定代理组的 emby 走组内网络匹配 + 随机，未绑组的走 Worker 本地代理"> 
                 <label class="mode-label">模式</label>
                 <select id="proxy-mode-select">
-                  <option value="node" ${state.proxyMode === "node" ? "selected" : ""}>Node 代理</option>
+                  <option value="node" ${state.proxyMode === "node" ? "selected" : ""}>Node（组路由）</option>
                   <option value="local" ${state.proxyMode === "local" ? "selected" : ""}>Worker 代理</option>
                   <option value="direct" ${state.proxyMode === "direct" ? "selected" : ""}>直连</option>
                 </select>
@@ -1278,7 +1279,7 @@
                 </div>
                 <p class="hint" style="margin:0;">
                   URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
-                  代理模式由顶部全局设置决定（Node 代理 / Worker 代理 / 直连）
+                  代理模式由顶部全局设置决定（Node 组路由 / Worker 代理 / 直连）
                 </p>
                 <div class="modal-footer">
                   <button class="btn btn-ghost" data-close>取消</button>

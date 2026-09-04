@@ -214,8 +214,8 @@ export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Respons
   // 定向 INSERT + version 原子递增，避免整表 DELETE + 重插的并发丢数据
   await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(
-      "INSERT INTO embys(name, backend_url, node_id, home_node_id, group_id, created_at) VALUES(?,?,?,?,?,?)",
-    ).bind(record.name, record.backend_url, '', '', record.group_id, record.created_at),
+      "INSERT INTO embys(name, backend_url, group_id, created_at) VALUES(?,?,?,?)",
+    ).bind(record.name, record.backend_url, record.group_id, record.created_at),
     env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
   ]);
   embys.version += 1;

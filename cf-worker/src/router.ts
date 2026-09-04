@@ -419,8 +419,8 @@ export async function handleDirectRequest(
       const name = await generateDirectEmbyName(backendOrigin, attempt);
       const createdAt = new Date().toISOString();
       const res = await env.EMBY_DB.prepare(
-        "INSERT INTO embys(name, backend_url, node_id, home_node_id, created_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO NOTHING",
-      ).bind(name, backendOrigin, '', '', createdAt).run();
+        "INSERT INTO embys(name, backend_url, created_at) VALUES(?,?,?) ON CONFLICT(name) DO NOTHING",
+      ).bind(name, backendOrigin, createdAt).run();
       if (res.meta.changes > 0) {
         emby = {
           name,
