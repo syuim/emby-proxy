@@ -893,7 +893,7 @@
                             <td><input class="row-backend mono" value="${escapeHtml(e.backend_url)}" /></td>
                             <td>
                               <select class="row-group">
-                                <option value="">未绑定（全局节点）</option>
+                                <option value="">未绑定（Worker 本地代理）</option>
                                 ${state.groups.map((g) =>
                                   `<option value="${g.id}" ${String(e.group_id) === String(g.id) ? "selected" : ""}>${escapeHtml(g.name)}</option>`
                                 ).join("")}
@@ -1284,6 +1284,13 @@
                   <label>backend_url</label>
                   <input id="e-backend" placeholder="http://emby.internal:8096" />
                 </div>
+                <div class="field">
+                  <label>代理组 <span class="hint">可留空；绑定后 node 模式按组路由</span></label>
+                  <select id="e-group">
+                    <option value="">不绑定（Worker 本地代理）</option>
+                    ${state.groups.map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join("")}
+                  </select>
+                </div>
                 <p class="hint" style="margin:0;">
                   URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
                   代理模式由顶部全局设置决定（Node 代理 / Worker 代理 / 直连）
@@ -1300,8 +1307,10 @@
         const submit = async () => {
           const name = root.querySelector("#e-name").value.trim();
           const backend = root.querySelector("#e-backend").value.trim();
+          const $group = root.querySelector("#e-group");
+          const groupId = $group && $group.value !== "" ? Number($group.value) : null;
           try {
-            await api("/emby/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend }) });
+            await api("/emby/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, group_id: groupId }) });
             toast("已添加并推送到所有节点", "ok");
             closeModal();
             await refreshAll();
