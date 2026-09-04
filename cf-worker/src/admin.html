@@ -575,7 +575,7 @@
     <div id="modal-root"></div>
     <script>
       const $app = document.getElementById("app");
-      const state = { tab: (v => ["embys", "nodes", "groups"].includes(v) ? v : "embys")(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
+      const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -713,44 +713,7 @@
           toast(e.message, "err");
         }
       }
-      // emby 页探测：报告节点 → emby 后端的 TCP 延迟（backend_latencies），
-      // 与节点页的节点健康探测区分开
-      async function probeEmbysAndReport() {
-        try {
-          const h = await api("/emby/admin/api/probe", { method: "POST" });
-          await refreshAll();
-          if (state.embys.length === 0) {
-            toast("探测完成：暂无 emby", "ok");
-            return;
-          }
-          let badCount = 0;
-          const lines = state.embys.map((e) => {
-            if (state.proxyMode !== "node") {
-              return `· ${e.name}：${state.proxyMode === "direct" ? "直连（不经代理）" : "Worker 代理"}`;
-            }
-            if (e.group_id == null) return `· ${e.name}：Worker 代理（未绑组）`;
-            const memberIds = (state.groups.find((g) => g.id === e.group_id)?.node_ids) || [];
-            const pick = state.nodes.find((n) => memberIds.includes(n.id) && h.nodes?.[n.id]?.healthy);
-            if (!pick) {
-              badCount++;
-              return `· ${e.name}：组内节点不可达`;
-            }
-            const ms = (h.nodes?.[pick.id]?.backend_latencies || {})[e.name];
-            if (ms == null || ms < 0) {
-              badCount++;
-              return `· ${e.name}：不可达`;
-            }
-            return `· ${e.name}（${pick.name}）：${ms} ms`;
-          });
-          toast(
-            "节点 → 后端延迟\n" + lines.join("\n"),
-            badCount > 0 ? "err" : "ok",
-            badCount > 0 ? 10000 : 6000,
-          );
-        } catch (e) {
-          toast(e.message, "err");
-        }
-      }
+      // emby 页探测已移除（探测能力由节点面板的 ⟳ 探测承载）
       async function resyncAndReport() {
         try {
           const r = await api("/emby/admin/api/sync", { method: "POST" });
@@ -790,8 +753,7 @@
             <div class="tabs-row">
               <div class="tabs">
                 <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
-                <button data-tab="nodes" class="${state.tab === "nodes" ? "active" : ""}">Nodes</button>
-                <button data-tab="groups" class="${state.tab === "groups" ? "active" : ""}">代理组</button>
+                <button data-tab="groups" class="${state.tab === "groups" ? "active" : ""}">代理组 + 节点</button>
               </div>
               <div class="mode-selector" title="全局模式；Node 档下，绑定代理组的 emby 走组内网络匹配 + 随机，未绑组的走 Worker 本地代理"> 
                 <label class="mode-label">模式</label>
@@ -801,7 +763,6 @@
                   <option value="direct" ${state.proxyMode === "direct" ? "selected" : ""}>直连</option>
                 </select>
               </div>
-              <button class="btn btn-primary" id="btn-add">${state.tab === "embys" ? "+ Emby" : state.tab === "groups" ? "+ 组" : "+ 节点"}</button>
             </div>
             <div id="tab-content"></div>
           </main>
@@ -833,14 +794,8 @@
             }
           };
         }
-        $app.querySelector("#btn-add").onclick = () => {
-          if (state.tab === "embys") openAddEmbyModal();
-          else if (state.tab === "groups") openGroupModal(null);
-          else openAddNodeModal();
-        };
         if (state.tab === "embys") renderEmbys();
-        else if (state.tab === "groups") renderGroups();
-        else renderNodes();
+        else renderGroups();
       }
 
       function renderLogin() {
@@ -882,7 +837,7 @@
           <div class="panel">
             <div class="toolbar">
               <h2>Emby 列表</h2>
-              <button class="btn btn-ghost" id="e-probe">⟳ 探测</button>
+              <button class="btn btn-primary" id="e-add">+ Emby</button>
             </div>
             ${state.embys.length === 0
               ? '<div class="empty"><div class="empty-icon">📭</div>还没有 emby 配置</div>'
@@ -942,7 +897,7 @@
         const enext = c.querySelector("#enext");
         if (enext) enext.onclick = () => { state.embyPage++; render(); };
 
-        c.querySelector("#e-probe").onclick = probeEmbysAndReport;
+        c.querySelector("#e-add").onclick = openAddEmbyModal;
 
         c.querySelectorAll("tbody tr").forEach((tr) => {
           const name = tr.dataset.name;
@@ -987,19 +942,18 @@
         });
       }
 
-      // ---------- Nodes（含 Health 列） ----------
-      function renderNodes() {
-        const c = $app.querySelector("#tab-content");
+      // ---------- 节点列表面板（嵌在代理组页下方） ----------
+      function nodePanelHtml() {
         const pageSize = 15;
         const totalPages = Math.max(1, Math.ceil(state.nodes.length / pageSize));
         state.nodePage = Math.min(state.nodePage, totalPages - 1);
         const page = state.nodePage;
         const paged = state.nodes.slice(page * pageSize, (page + 1) * pageSize);
-
-        c.innerHTML = `
+        return `
           <div class="panel">
             <div class="toolbar">
               <h2>节点列表</h2>
+              <button class="btn btn-primary" id="n-add">+ 节点</button>
               <button class="btn btn-ghost" id="n-probe">⟳ 探测</button>
               <button class="btn btn-ghost" id="h-sync"><span class="hide-sm">↑ 重推所有节点</span><span class="only-sm">↑ 重推</span></button>
             </div>
@@ -1065,6 +1019,11 @@
             }
           </div>
         `;
+      }
+
+      function wireNodePanel() {
+        const c = $app.querySelector("#tab-content");
+        c.querySelector("#n-add").onclick = openAddNodeModal;
         c.querySelector("#h-sync").onclick = resyncAndReport;
         c.querySelector("#n-probe").onclick = probeAndReport;
 
@@ -1073,7 +1032,7 @@
         const nnext = c.querySelector("#nnext");
         if (nnext) nnext.onclick = () => { state.nodePage++; render(); };
 
-        c.querySelectorAll("tbody tr").forEach((tr) => {
+        c.querySelectorAll(".table-wrap-nodes tbody tr").forEach((tr) => {
           const id = tr.dataset.id;
           const mode = tr.dataset.mode;
           if (mode === "view") {
@@ -1124,6 +1083,7 @@
           <div class="panel">
             <div class="toolbar">
               <h2>代理组列表</h2>
+              <button class="btn btn-primary" id="g-add">+ 组</button>
               <span class="hint">绑定组后 emby 按入口网络（电信/联通/移动）匹配组内 node 随机负载；未标注网络的 node 任何网络可选</span>
             </div>
             ${state.groups.length === 0
@@ -1155,8 +1115,10 @@
                 </table></div>`
             }
           </div>
+        ${nodePanelHtml()}
         `;
-        c.querySelectorAll("tbody tr").forEach((tr) => {
+        c.querySelector("#g-add").onclick = () => openGroupModal(null);
+        c.querySelectorAll("tr[data-gid]").forEach((tr) => {
           const gid = Number(tr.dataset.gid);
           tr.querySelector('[data-act="edit"]').onclick = () => {
             const g = state.groups.find((x) => x.id === gid);
@@ -1173,6 +1135,7 @@
             } catch (e) { toast(e.message, "err"); }
           };
         });
+        wireNodePanel();
       }
 
       // 添加/编辑组弹窗：编辑态点保存才生效
@@ -1194,7 +1157,7 @@
                 <div class="field">
                   <label>成员节点 <span class="hint">可多选；勾选后该组只在这些 node 上负载均衡</span></label>
                   ${state.nodes.length === 0
-                    ? '<p class="hint" style="margin:0;">暂无节点，请先到 Nodes 页添加</p>'
+                    ? '<p class="hint" style="margin:0;">暂无节点，请先在下方节点列表添加</p>'
                     : `<div style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;">
                         ${state.nodes.map((n) => `
                           <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
