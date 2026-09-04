@@ -86,14 +86,13 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionCo
     name: trimmed.name,
     public_url: trimmed.public_url,
     created_at: new Date().toISOString(),
-    sort_order: nodes.nodes.reduce((m, n) => Math.max(m, n.sort_order), -1) + 1,
     isp_tags: ispTags ?? [],
   };
   nodes.nodes.push(newNode);
   const stmts: D1PreparedStatement[] = [
     env.EMBY_DB.prepare(
-      "INSERT INTO nodes(id, name, public_url, created_at, sort_order, isp_tags) VALUES(?,?,?,?,?,?)",
-    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.created_at, newNode.sort_order, JSON.stringify(newNode.isp_tags)),
+      "INSERT INTO nodes(id, name, public_url, created_at, isp_tags) VALUES(?,?,?,?,?)",
+    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.created_at, JSON.stringify(newNode.isp_tags)),
   ];
   await env.EMBY_DB.batch(stmts);
   // 添加节点后立即探测，写入健康状态

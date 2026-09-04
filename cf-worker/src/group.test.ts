@@ -9,7 +9,6 @@ function makeNode(id: string, ispTags: string[] = []): NodeRecord {
     name: id,
     public_url: `https://${id}.example.com`,
     created_at: "2026-01-01T00:00:00Z",
-    sort_order: 0,
     isp_tags: ispTags,
   };
 }
