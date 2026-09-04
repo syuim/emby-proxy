@@ -953,9 +953,9 @@
           <div class="panel">
             <div class="toolbar">
               <h2>节点列表</h2>
-              <button class="btn btn-primary" id="n-add">+ 节点</button>
               <button class="btn btn-ghost" id="n-probe">⟳ 探测</button>
               <button class="btn btn-ghost" id="h-sync"><span class="hide-sm">↑ 重推所有节点</span><span class="only-sm">↑ 重推</span></button>
+              <button class="btn btn-primary" id="n-add">+ 节点</button>
             </div>
             ${state.nodes.length === 0
               ? '<div class="empty"><div class="empty-icon">🖧</div>还没有节点</div>'
@@ -1084,8 +1084,8 @@
             <div class="toolbar">
               <h2>代理组列表</h2>
               <button class="btn btn-primary" id="g-add">+ 组</button>
-              <span class="hint">绑定组后 emby 按入口网络（电信/联通/移动）匹配组内 node 随机负载；未标注网络的 node 任何网络可选</span>
             </div>
+            <p class="hint" style="margin:-6px 0 14px;">绑定组后 emby 按入口网络（电信/联通/移动）匹配组内 node 随机负载；未标注网络的 node 任何网络可选</p>
             ${state.groups.length === 0
               ? '<div class="empty"><div class="empty-icon">🗂</div>还没有代理组</div>'
               : `<div class="table-wrap"><table>
