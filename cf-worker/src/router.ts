@@ -37,9 +37,12 @@ export async function handleClientRequest(
   }
 
   const subpath = "/" + segments.slice(2).join("/");
+  const clientIp = request.headers.get("CF-Connecting-IP") ?? "-";
+  const isp = classifyClientIsp(request);
 
   // 规则1：自动注册的 d_xxx emby（node_id='local'）始终强制走本地代理，不受全局模式影响
   if (emby.node_id === LOCAL_NODE_ID) {
+    console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=local reason=auto`);
     return proxyLocal(
       request,
       buildTargetUrl(emby.backend_url, subpath, url.search),
@@ -52,21 +55,22 @@ export async function handleClientRequest(
   const target = buildTargetUrl(emby.backend_url, subpath, url.search);
   switch (configMeta.proxy_mode) {
     case "direct":
+      console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=direct`);
       return new Response(null, {
         status: 307,
         headers: { Location: target, "Cache-Control": "no-store" },
       });
     case "local":
+      console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=local`);
       return proxyLocal(request, target, emby.name, emby.backend_url);
   }
 
   // case 'node': emby 绑定代理组 → 组内按入口网络过滤后纯随机；否则走全局 active_node_id
   if (emby.group_id != null) {
-    const isp = classifyClientIsp(request);
     const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
     if (pick) {
       console.log(
-        `[group] emby='${emby.name}' group=${emby.group_id} isp=${isp} alive=${pick.aliveSize} pool=${pick.poolSize} node='${pick.node.id}'`,
+        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=group group=${emby.group_id} node=${pick.node.id} alive=${pick.aliveSize} pool=${pick.poolSize}`,
       );
       // 节点协议路径不含 /emby 前缀：/<name>/subpath
       const nodeTarget = buildTargetUrl(pick.node.public_url, "/" + emby.name + subpath, url.search);
@@ -79,8 +83,8 @@ export async function handleClientRequest(
       });
     }
     // 组不存在/无成员/全灭 → Worker local 兜底（不写 config_meta，与全局 failover 隔离）
-    console.warn(
-      `[group] emby='${emby.name}' group=${emby.group_id} no usable node, fallback to worker proxy`,
+    console.log(
+      `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=group-fallback reason=no-usable-node`,
     );
     return proxyLocal(request, target, emby.name, emby.backend_url);
   }
@@ -88,10 +92,16 @@ export async function handleClientRequest(
   const node = await chooseNode(env, configMeta.active_node_id, nodesKV.nodes, ctx);
   if (!node) {
     // 全灭 → Worker 本地代理兜底
+    console.log(
+      `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=local-fallback reason=all-nodes-dead`,
+    );
     return proxyLocal(request, target, emby.name, emby.backend_url);
   }
 
   // 节点协议路径不含 /emby 前缀：/<name>/subpath
+  console.log(
+    `[req] ip=${clientIp} isp=${isp} emby=${emby.name} path=${subpath} mode=node node=${node.id}`,
+  );
   const nodeTarget = buildTargetUrl(node.public_url, "/" + emby.name + subpath, url.search);
 
   return new Response(null, {
