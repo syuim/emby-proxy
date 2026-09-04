@@ -193,8 +193,6 @@ export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Respons
     name: typeof name === "string" ? name.trim() : "",
     backend_url:
       typeof backend_url === "string" ? backend_url.trim().replace(/\/$/, "") : "",
-    node_id: "",
-    home_node_id: "",
   };
   const err = validateEmby(trimmed);
   if (err) return json(400, { error: err });
@@ -217,7 +215,7 @@ export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Respons
   await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(
       "INSERT INTO embys(name, backend_url, node_id, home_node_id, group_id, created_at) VALUES(?,?,?,?,?,?)",
-    ).bind(record.name, record.backend_url, record.node_id, record.home_node_id, record.group_id, record.created_at),
+    ).bind(record.name, record.backend_url, '', '', record.group_id, record.created_at),
     env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
   ]);
   embys.version += 1;

@@ -65,7 +65,7 @@ export async function readConfigMeta(env: Env): Promise<ConfigMeta> {
 export async function readEmbys(env: Env): Promise<EmbysKV> {
   const [embysRes, verRes] = await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(
-      "SELECT name, backend_url, node_id, home_node_id, group_id, created_at FROM embys ORDER BY name",
+      "SELECT name, backend_url, group_id, created_at FROM embys ORDER BY name",
     ),
     env.EMBY_DB.prepare("SELECT version FROM config_meta WHERE id = 1"),
   ]);
@@ -79,8 +79,6 @@ export async function readEmbys(env: Env): Promise<EmbysKV> {
     embys: embysRes.results.map((r: any) => ({
       name: r.name,
       backend_url: r.backend_url,
-      node_id: r.node_id,
-      home_node_id: r.home_node_id ?? "",
       group_id: r.group_id ?? null,
       created_at: r.created_at,
     })),

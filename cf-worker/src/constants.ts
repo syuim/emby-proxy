@@ -24,9 +24,6 @@ export const TMDB_BASE_PATH = "/tmdb";
 // 豆瓣 API 简化版后端（与 addon 同机不同容器）
 export const DOUBAN_API_ORIGIN = "http://rn.127315.xyz:4000";
 
-// emby.node_id 哨兵值：Worker 本地代理（不 307，Worker 直接 fetch 后端回传）
-export const LOCAL_NODE_ID = "local";
-
 export const RESERVED_NAMES = new Set([
   "admin",
   "api",

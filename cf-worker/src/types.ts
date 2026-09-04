@@ -26,10 +26,6 @@ export interface ProxyGroupWithMembers extends ProxyGroup {
 export interface EmbyRecord {
   name: string;
   backend_url: string;
-  // 仅哨兵用途：'local' = 自动注册 d_xxx（始终 Worker local）；'' = 普通 emby
-  node_id: string;
-  // 历史字段（曾为故障恢复目标节点），已无路由消费，仅兼容旧数据
-  home_node_id: string;
   created_at: string;
   // 绑定的代理组；null = 未绑定（node 模式下直接 Worker local）
   group_id: number | null;

@@ -1,4 +1,4 @@
-import { EMBY_BASE_PATH, LOCAL_NODE_ID, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, URL_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, URL_BASE_PATH } from "./constants";
 import { handleUrlRequest } from "./urlproxy";
 import { readConfigMeta, readEmbys, readGroups, readNodes } from "./storage";
 import { chooseNodeFromGroup, classifyClientIsp } from "./group";
@@ -37,18 +37,7 @@ export async function handleClientRequest(
   const clientIp = request.headers.get("CF-Connecting-IP") ?? "-";
   const isp = classifyClientIsp(request);
 
-  // 规则1：自动注册的 d_xxx emby（node_id='local'）始终强制走本地代理，不受全局模式影响
-  if (emby.node_id === LOCAL_NODE_ID) {
-    console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=local reason=auto`);
-    return proxyLocal(
-      request,
-      buildTargetUrl(emby.backend_url, subpath, url.search),
-      emby.name,
-      emby.backend_url,
-    );
-  }
-
-  // 规则2：全局模式决定路由
+  // 规则：全局模式决定路由
   const target = buildTargetUrl(emby.backend_url, subpath, url.search);
   switch (configMeta.proxy_mode) {
     case "direct":
@@ -431,13 +420,11 @@ export async function handleDirectRequest(
       const createdAt = new Date().toISOString();
       const res = await env.EMBY_DB.prepare(
         "INSERT INTO embys(name, backend_url, node_id, home_node_id, created_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO NOTHING",
-      ).bind(name, backendOrigin, LOCAL_NODE_ID, LOCAL_NODE_ID, createdAt).run();
+      ).bind(name, backendOrigin, '', '', createdAt).run();
       if (res.meta.changes > 0) {
         emby = {
           name,
           backend_url: backendOrigin,
-          node_id: LOCAL_NODE_ID,
-          home_node_id: LOCAL_NODE_ID,
           group_id: null,
           created_at: createdAt,
         };
