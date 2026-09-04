@@ -64,6 +64,14 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 修改 emby 字段请使用定向 `UPDATE`，不要走整表 DELETE + 重插。整表 DELETE + 重插是单个事务，任意一行写入失败会静默回滚全部改动。
 
+### 代理组相关（migration 0007）
+
+`0007_proxy_groups_isp.sql` 新增：`nodes.isp_tags`（JSON 字符串数组 `["ct","cu","cm"]`，空数组 = 未标注/任何网络可选）、`proxy_groups` 表、`node_groups`（node ↔ 组多对多，无外键，应用层维护）、`embys.group_id`（可空，`NULL` = 未绑定组）。
+
+组/ISP 标签只影响 Worker 侧路由决策，**不进入 sync 协议**（节点 snapshot 仍是 path_prefix/backend_url），因此组 CRUD、成员变更、node isp_tags 编辑、emby 绑定/解绑组均**不 bump version、不 fan-out**。删组时应用层把引用它的 `embys.group_id` 置 NULL；删节点时清理 `node_groups` 关联。
+
+入口网络判定数据在 `cf-worker/src/isp.ts`（CAIDA 2026-08 快照归类 + 撞名核验，国内阿里云/腾讯云 ASN 写死归 ct，未命中 = unknown），表更新时替换该文件三个 ASN Set 即可。
+
 ## URL Namespace & Naming Rules
 
 一级路径按功能划分（硬切换，无旧路径兼容）：
@@ -91,6 +99,18 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 - **恢复（failback）**：home = sort_order 第一个节点。探活周期发现 home 连续两个周期健康（防 flapping）→ 把 `active_node_id` 切回 home；reorder 后首节点变化，下一周期自动 failback。
 - **误报防护**：故障转移持久化写库前，会对“不健康”节点实时复核探测一次（`persistIfConfirmedDead`）；节点实际活着则跳过写库，本次请求仍走转移目标，等 cron 自愈。
 - 全局模式切换（PUT `/admin/api/config`）不写 `embys` 表，也不 bump version / fan-out（节点 snapshot 只含 path_prefix/backend_url，与模式无关）。
+
+### 代理组路由（per-emby，仅 node 模式下生效）
+
+`proxy_mode = 'node'` 且 `embys.group_id` 非空时，该 emby 不走全局 `active_node_id`，改走组路由（`src/group.ts`）：
+
+1. 取组内 node（`node_groups` 成员）；组不存在/无成员 → Worker local 兜底。
+2. 组内成员**每请求并发存活探测**（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），得存活集合。
+3. **入口网络判定**：`request.cf.asn` 查 `isp.ts` 表（未命中用 `asOrganization` 强关键字二次兜底），输出 ct/cu/cm/unknown。
+4. **软过滤 + 纯随机**：在存活集合里按 ISP 过滤（node 无标签 = 全兼容）；入口 unknown 不过滤；过滤后为空则回退组内全部存活 node（宁可错配不断流）；最后每请求纯随机挑一个，307 到该 node。
+5. **全灭兜底**：组内无存活 node → Worker local 代理兜底。组路由**不读写 `config_meta.active_node_id`**，与全局 failover/failback 完全隔离；cron 探活本就全量探测所有 node（与组无关），health 表天然覆盖组内成员。
+
+全局模式（local/direct）优先于组：绑组 emby 在全局 local/direct 下仍走全局语义。
 
 健康检测：cron 每 5 分钟探活（`wrangler.toml` 的 `crons = ["*/5 * * * *"]`），连续 2 次失败降级 / 1 次成功恢复。节点连续失败 ≥5 次后，30 分钟内只真实探测一次；探测成功后若节点 `applied_version` 落后 `config_meta.version`，会异步补推一次配置。
 

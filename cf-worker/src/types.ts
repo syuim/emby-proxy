@@ -5,10 +5,22 @@ export interface NodeRecord {
   created_at: string;
   // 排序序号，故障转移按此顺序依次往下选择
   sort_order: number;
+  // 适合的网络标签（'ct' 电信 / 'cu' 联通 / 'cm' 移动），空数组 = 任何网络可选
+  isp_tags: string[];
 }
 
 export interface NodesKV {
   nodes: NodeRecord[];
+}
+
+export interface ProxyGroup {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
+export interface ProxyGroupWithMembers extends ProxyGroup {
+  node_ids: string[];
 }
 
 export interface EmbyRecord {
@@ -19,6 +31,8 @@ export interface EmbyRecord {
   // 原始配置节点（恢复机制的切回目标，仅显式配置时更新）
   home_node_id: string;
   created_at: string;
+  // 绑定的代理组；null = 未绑定（走全局 node 模式逻辑）
+  group_id: number | null;
 }
 
 export interface EmbysKV {

@@ -1,7 +1,9 @@
-import { EMBY_BASE_PATH, HEALTH_PROBE_TIMEOUT_MS, LOCAL_NODE_ID, NODE_HEALTH_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, URL_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, LOCAL_NODE_ID, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, URL_BASE_PATH } from "./constants";
 import { handleUrlRequest } from "./urlproxy";
 import { readConfigMeta, readEmbys, readNodes } from "./storage";
 import { immediateProbe } from "./health";
+import { probeAlive } from "./alive";
+import { chooseNodeFromGroup, classifyClientIsp } from "./group";
 import type { Env, NodeRecord } from "./types";
 
 
@@ -58,7 +60,31 @@ export async function handleClientRequest(
       return proxyLocal(request, target, emby.name, emby.backend_url);
   }
 
-  // case 'node': 按 sort_order 依次探测节点，用全局 active_node_id
+  // case 'node': emby 绑定代理组 → 组内按入口网络过滤后纯随机；否则走全局 active_node_id
+  if (emby.group_id != null) {
+    const isp = classifyClientIsp(request);
+    const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
+    if (pick) {
+      console.log(
+        `[group] emby='${emby.name}' group=${emby.group_id} isp=${isp} alive=${pick.aliveSize} pool=${pick.poolSize} node='${pick.node.id}'`,
+      );
+      // 节点协议路径不含 /emby 前缀：/<name>/subpath
+      const nodeTarget = buildTargetUrl(pick.node.public_url, "/" + emby.name + subpath, url.search);
+      return new Response(null, {
+        status: 307,
+        headers: {
+          Location: nodeTarget,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    // 组不存在/无成员/全灭 → Worker local 兜底（不写 config_meta，与全局 failover 隔离）
+    console.warn(
+      `[group] emby='${emby.name}' group=${emby.group_id} no usable node, fallback to worker proxy`,
+    );
+    return proxyLocal(request, target, emby.name, emby.backend_url);
+  }
+
   const node = await chooseNode(env, configMeta.active_node_id, nodesKV.nodes, ctx);
   if (!node) {
     // 全灭 → Worker 本地代理兜底
@@ -422,6 +448,7 @@ export async function handleDirectRequest(
           backend_url: backendOrigin,
           node_id: LOCAL_NODE_ID,
           home_node_id: LOCAL_NODE_ID,
+          group_id: null,
           created_at: createdAt,
         };
         break;
@@ -512,36 +539,7 @@ export function rewriteM3u8Urls(text: string, rewrite: (raw: string) => string):
   });
 }
 
-// 请求级存活探测：GET /__health，3s 超时，isolate 内存缓存。
-// 非对称 TTL：活 30s（控制节点刚挂时的盲区），死 15s（更快重试发现恢复）。
-// 节点失败的判定以此为准（请求驱动、秒级发现），不依赖 cron 探活周期。
-const aliveCache = new Map<string, { alive: boolean; ts: number }>();
-const ALIVE_TTL_OK_MS = 30_000;
-const ALIVE_TTL_FAIL_MS = 15_000;
-
-async function probeAlive(node: NodeRecord): Promise<boolean> {
-  const hit = aliveCache.get(node.id);
-  if (hit && Date.now() - hit.ts < (hit.alive ? ALIVE_TTL_OK_MS : ALIVE_TTL_FAIL_MS)) {
-    return hit.alive;
-  }
-
-  let alive = false;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
-  try {
-    const resp = await fetch(
-      node.public_url.replace(/\/$/, "") + NODE_HEALTH_PATH,
-      { signal: controller.signal },
-    );
-    alive = resp.ok;
-  } catch {
-    alive = false;
-  } finally {
-    clearTimeout(timer);
-  }
-  aliveCache.set(node.id, { alive, ts: Date.now() });
-  return alive;
-}
+// 请求级存活探测已移至 alive.ts（probeAlive + 非对称 TTL 缓存），router 与组路由共用。
 
 async function chooseNode(
   env: Env,

@@ -5,23 +5,36 @@ import type {
   HealthKV,
   NodeHealth,
   NodesKV,
+  ProxyGroup,
+  ProxyGroupWithMembers,
 } from "./types";
 
 const EMPTY_NODES: NodesKV = { nodes: [] };
 const EMPTY_EMBYS: EmbysKV = { version: 0, embys: [] };
 const EMPTY_HEALTH: HealthKV = { updated_at: "", nodes: {} };
 
+function parseIspTags(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 // ---------- read ----------
 
 export async function readNodes(env: Env): Promise<NodesKV> {
   const res = await env.EMBY_DB.prepare(
-    "SELECT id, name, public_url, created_at, sort_order FROM nodes ORDER BY sort_order, id",
+    "SELECT id, name, public_url, created_at, sort_order, isp_tags FROM nodes ORDER BY sort_order, id",
   ).all<{
     id: string;
     name: string;
     public_url: string;
     created_at: string;
     sort_order: number;
+    isp_tags: string | null;
   }>();
   if (!res.success || !res.results) return structuredClone(EMPTY_NODES);
   return {
@@ -31,6 +44,7 @@ export async function readNodes(env: Env): Promise<NodesKV> {
       public_url: r.public_url,
       created_at: r.created_at,
       sort_order: r.sort_order ?? 0,
+      isp_tags: parseIspTags(r.isp_tags),
     })),
   };
 }
@@ -52,7 +66,7 @@ export async function readConfigMeta(env: Env): Promise<ConfigMeta> {
 export async function readEmbys(env: Env): Promise<EmbysKV> {
   const [embysRes, verRes] = await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(
-      "SELECT name, backend_url, node_id, home_node_id, created_at FROM embys ORDER BY name",
+      "SELECT name, backend_url, node_id, home_node_id, group_id, created_at FROM embys ORDER BY name",
     ),
     env.EMBY_DB.prepare("SELECT version FROM config_meta WHERE id = 1"),
   ]);
@@ -68,9 +82,50 @@ export async function readEmbys(env: Env): Promise<EmbysKV> {
       backend_url: r.backend_url,
       node_id: r.node_id,
       home_node_id: r.home_node_id ?? "",
+      group_id: r.group_id ?? null,
       created_at: r.created_at,
     })),
   };
+}
+
+export async function readGroups(env: Env): Promise<ProxyGroup[]> {
+  const res = await env.EMBY_DB.prepare(
+    "SELECT id, name, created_at FROM proxy_groups ORDER BY name, id",
+  ).all<{ id: number; name: string; created_at: string }>();
+  if (!res.success || !res.results) return [];
+  return res.results.map((r) => ({
+    id: r.id,
+    name: r.name,
+    created_at: r.created_at,
+  }));
+}
+
+export async function readGroupsWithMembers(env: Env): Promise<ProxyGroupWithMembers[]> {
+  const [groups, members] = await env.EMBY_DB.batch([
+    env.EMBY_DB.prepare(
+      "SELECT id, name, created_at FROM proxy_groups ORDER BY name, id",
+    ),
+    env.EMBY_DB.prepare("SELECT group_id, node_id FROM node_groups"),
+  ]);
+  const list: ProxyGroupWithMembers[] = (groups.results ?? []).map((r: any) => ({
+    id: r.id as number,
+    name: r.name as string,
+    created_at: r.created_at as string,
+    node_ids: [],
+  }));
+  const byId = new Map(list.map((g) => [g.id, g]));
+  for (const m of (members.results ?? []) as { group_id: number; node_id: string }[]) {
+    byId.get(m.group_id)?.node_ids.push(m.node_id);
+  }
+  return list;
+}
+
+export async function readGroupNodeIds(env: Env, groupId: number): Promise<string[]> {
+  const res = await env.EMBY_DB.prepare(
+    "SELECT node_id FROM node_groups WHERE group_id = ?",
+  ).bind(groupId).all<{ node_id: string }>();
+  if (!res.success || !res.results) return [];
+  return res.results.map((r) => r.node_id);
 }
 
 export async function readHealth(env: Env): Promise<HealthKV> {

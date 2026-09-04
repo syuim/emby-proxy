@@ -1,20 +1,25 @@
 import adminHtml from "../admin.html";
+import { classifyIsp } from "../isp";
 import type { Env } from "../types";
 import { buildLoginCookie, buildLogoutCookie, checkAdminAuth, createSession, destroySession } from "./auth";
 import {
   handleAddEmby,
   handleAddNode,
+  handleCreateGroup,
   handleDeleteEmby,
+  handleDeleteGroup,
   handleDeleteNode,
   handleGetConfig,
   handleHealth,
   handleListEmbys,
+  handleListGroups,
   handleListNodes,
   handleManualSync,
   handleProbe,
   handleReorderNodes,
   handleUpdateConfig,
   handleUpdateEmby,
+  handleUpdateGroup,
   handleUpdateNode,
 } from "./handlers";
 
@@ -79,6 +84,31 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
     if (method === "PUT")
       return wrapJson(request, (req) => handleUpdateEmby(req, env, name));
     if (method === "DELETE") return handleDeleteEmby(env, name);
+  }
+
+  // 代理组 CRUD
+  if (path === "/admin/api/groups") {
+    if (method === "GET") return handleListGroups(env);
+    if (method === "POST") return wrapJson(request, (req) => handleCreateGroup(req, env));
+  }
+  const groupMatch = path.match(/^\/admin\/api\/groups\/(\d+)$/);
+  if (groupMatch) {
+    const groupId = Number(groupMatch[1]);
+    if (method === "PUT")
+      return wrapJson(request, (req) => handleUpdateGroup(req, env, groupId));
+    if (method === "DELETE") return handleDeleteGroup(env, groupId);
+  }
+
+  // 入口网络诊断：显示当前请求（管理面板操作者）的 ASN 归类，用于校验判定逻辑
+  if (path === "/admin/api/diag" && method === "GET") {
+    const cf = (
+      request as Request & { cf?: { asn?: number; asOrganization?: string } }
+    ).cf;
+    return jsonOk({
+      asn: cf?.asn ?? null,
+      as_organization: cf?.asOrganization ?? null,
+      isp: classifyIsp(cf?.asn, cf?.asOrganization),
+    });
   }
 
   // 全局代理模式
