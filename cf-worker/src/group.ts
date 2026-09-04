@@ -24,10 +24,9 @@ export interface GroupPool {
   matched: boolean;
 }
 
-// ISP 是软过滤：unknown（海外/未分类）不过滤；node 未标注任何 ISP = 全兼容。
-// 匹配集合为空（组内没有该 ISP 的 node）时回退全部存活 node，宁可错配不断流。
+// ISP 是软过滤：node 未标注任何 ISP = 全兼容。
+// 匹配集合为空（组内没有该 ISP 的 node）时回退全部存活 node，宁可错配不断流（overseas 除外）。
 export function filterGroupPool(alive: NodeRecord[], isp: IspClass): GroupPool {
-  if (isp === "unknown") return { pool: alive, matched: true };
   const matched = alive.filter(
     (n) => n.isp_tags.length === 0 || n.isp_tags.includes(isp),
   );
@@ -60,6 +59,8 @@ export async function chooseNodeFromGroup(
   if (alive.length === 0) return null;
 
   const { pool, matched } = filterGroupPool(alive, isp);
+  // overseas 入口：组内无匹配节点时不回退全部，走 Worker local
+  if (isp === "overseas" && !matched) return null;
   const pick = pool[Math.floor(Math.random() * pool.length)]!;
   return {
     node: pick,

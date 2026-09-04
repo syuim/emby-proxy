@@ -36,17 +36,17 @@ describe("classifyIsp: ASN 命中", () => {
     [53792, "加拿大 CMCC（撞名剔除）"],
     [22034, "美国 McMaster（CMNET 子串误伤）"],
     [402205, "阿里云美国（海外，不写死）"],
-  ])("ASN %s → unknown（%s）", (asn, _desc) => {
-    expect(classifyIsp(asn, null)).toBe("unknown");
+  ])("ASN %s → overseas（%s）", (asn, _desc) => {
+    expect(classifyIsp(asn, null)).toBe("overseas");
   });
 
-  it("未收录 ASN（海外 Google）→ unknown", () => {
-    expect(classifyIsp(15169, null)).toBe("unknown");
+  it("未收录 ASN（海外 Google）→ overseas", () => {
+    expect(classifyIsp(15169, null)).toBe("overseas");
   });
 
-  it("无 asn 无 org → unknown", () => {
-    expect(classifyIsp(null, null)).toBe("unknown");
-    expect(classifyIsp(undefined, undefined)).toBe("unknown");
+  it("无 asn 无 org → overseas", () => {
+    expect(classifyIsp(null, null)).toBe("overseas");
+    expect(classifyIsp(undefined, undefined)).toBe("overseas");
   });
 });
 
@@ -68,8 +68,8 @@ describe("classifyIsp: 组织名二次兜底", () => {
     ["Canadian Museum of Civilization", "CMCC 撞名不兜底"],
     ["Unicom New Zealand Limited", "裸 UNICOM 撞名不兜底"],
     ["Netcom Enterprises Pvt Ltd", "NETCOM 撞名不兜底"],
-  ])("org '%s' → unknown（%s）", (org, _desc) => {
-    expect(classifyIsp(null, org)).toBe("unknown");
+  ])("org '%s' → overseas（%s）", (org, _desc) => {
+    expect(classifyIsp(null, org)).toBe("overseas");
   });
 
   it("asn 优先于 org（表内 ASN 不落入 org 兜底）", () => {

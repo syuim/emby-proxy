@@ -67,11 +67,6 @@ export async function handleClientRequest(
 
   // case 'node': emby 绑定代理组 → 组内按入口网络过滤后纯随机；否则走全局 active_node_id
   if (emby.group_id != null) {
-    // 入口网络无法归类时不确定哪个节点链路优，直接 Worker local 兜底
-    if (isp === "unknown") {
-      console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=local reason=unknown-isp`);
-      return proxyLocal(request, target, emby.name, emby.backend_url);
-    }
     const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
     if (pick) {
       const groups = await readGroups(env);

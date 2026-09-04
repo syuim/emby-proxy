@@ -28,7 +28,7 @@ interface JsonRequest {
 
 const GROUP_NAME_MAX = 32;
 
-const ISP_TAG_ORDER = ["ct", "cu", "cm"];
+const ISP_TAG_ORDER = ["ct", "cu", "cm", "overseas"];
 
 function parseIspTagsInput(v: unknown): string[] | null {
   if (v === undefined) return null;
@@ -68,7 +68,7 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionCo
   }
   const ispTags = parseIspTagsInput(req.body?.isp_tags);
   if (ispTags === null) {
-    return json(400, { error: "isp_tags 只能包含 ct / cu / cm" });
+    return json(400, { error: "isp_tags 只能包含 ct / cu / cm / overseas" });
   }
   const trimmed = { name: name.trim(), public_url: public_url.trim().replace(/\/$/, "") };
   const validation = validateNode(trimmed);
@@ -145,7 +145,7 @@ export async function handleUpdateNode(
   }
   const ispTags = parseIspTagsInput(req.body?.isp_tags);
   if (ispTags === null) {
-    return json(400, { error: "isp_tags 只能包含 ct / cu / cm" });
+    return json(400, { error: "isp_tags 只能包含 ct / cu / cm / overseas" });
   }
   if (ispTags !== null && JSON.stringify(ispTags) !== JSON.stringify(node.isp_tags)) {
     node.isp_tags = ispTags;

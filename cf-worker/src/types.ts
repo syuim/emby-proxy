@@ -5,7 +5,7 @@ export interface NodeRecord {
   created_at: string;
   // 排序序号，故障转移按此顺序依次往下选择
   sort_order: number;
-  // 适合的网络标签（'ct' 电信 / 'cu' 联通 / 'cm' 移动），空数组 = 任何网络可选
+  // 适合的网络标签（'ct' 电信 / 'cu' 联通 / 'cm' 移动 / 'overseas' 海外），空数组 = 任何网络可选
   isp_tags: string[];
 }
 

@@ -658,7 +658,7 @@
         const n = state.nodes.find((x) => x.id === id);
         return n ? n.name : id;
       }
-      const ISP_LABELS = { ct: "电信", cu: "联通", cm: "移动" };
+      const ISP_LABELS = { ct: "电信", cu: "联通", cm: "移动", overseas: "海外" };
       // 网络标签用中性样式，避免与健康状态的绿/红徽章混淆
       const ISP_CHIP_STYLE = "border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-text);";
       function ispBadges(tags) {
@@ -676,7 +676,7 @@
       function diagChip() {
         const d = state.diag;
         if (!d) return "";
-        const label = ISP_LABELS[d.isp] || "未知/海外";
+        const label = ISP_LABELS[d.isp] || "海外";
         return `<span class="badge" title="ASN ${d.asn ?? "-"} · ${escapeHtml(d.as_organization || "")}" style="${ISP_CHIP_STYLE}">入口:${label}${d.asn ? ` · AS${d.asn}` : ""}</span>`;
       }
       function healthBadge(nodeId) {
@@ -1022,7 +1022,8 @@
                             <td>
                               <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;"><input type="checkbox" class="n-isp" value="ct" ${(n.isp_tags || []).includes("ct") ? "checked" : ""} />电信</label>
                               <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;"><input type="checkbox" class="n-isp" value="cu" ${(n.isp_tags || []).includes("cu") ? "checked" : ""} />联通</label>
-                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="cm" ${(n.isp_tags || []).includes("cm") ? "checked" : ""} />移动</label>
+                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;"><input type="checkbox" class="n-isp" value="cm" ${(n.isp_tags || []).includes("cm") ? "checked" : ""} />移动</label>
+                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="overseas" ${(n.isp_tags || []).includes("overseas") ? "checked" : ""} />海外</label>
                             </td>
                             <td>${healthBadge(n.id)}</td>
                             <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
@@ -1335,6 +1336,7 @@
                     <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;"><input type="checkbox" class="n-isp-new" value="ct" />电信</label>
                     <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;"><input type="checkbox" class="n-isp-new" value="cu" />联通</label>
                     <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;"><input type="checkbox" class="n-isp-new" value="cm" />移动</label>
+                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;"><input type="checkbox" class="n-isp-new" value="overseas" />海外</label>
                   </div>
                 </div>
                 <div class="modal-footer">

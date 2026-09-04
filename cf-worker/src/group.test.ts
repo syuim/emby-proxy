@@ -67,9 +67,10 @@ describe("filterGroupPool", () => {
     expect(matched).toBe(true);
   });
 
-  it("isp=unknown 不过滤", () => {
-    const { pool, matched } = filterGroupPool(alive, "unknown");
-    expect(pool).toEqual(alive);
+  it("isp=overseas 只保留 overseas 标签与未标注 node", () => {
+    const nOs = makeNode("n-os", ["overseas"]);
+    const { pool, matched } = filterGroupPool([...alive, nOs], "overseas");
+    expect(pool.map((n) => n.id)).toEqual(["n-any", "n-os"]);
     expect(matched).toBe(true);
   });
 
@@ -131,13 +132,21 @@ describe("chooseNodeFromGroup", () => {
     expect(await chooseNodeFromGroup(env, 1, nodes, "ct")).toBeNull();
   });
 
-  it("unknown 入口不按 ISP 过滤", async () => {
+  it("overseas 入口：组内无 overseas 标签节点 → null", async () => {
     const env = stubEnv(1, ["n-ct", "n-cu"]);
     mockNodeHealth(new Set(["n-ct", "n-cu"]));
     const nodes = [makeNode("n-ct", ["ct"]), makeNode("n-cu", ["cu"])];
-    for (let i = 0; i < 20; i++) {
-      const pick = await chooseNodeFromGroup(env, 1, nodes, "unknown");
-      expect(["n-ct", "n-cu"]).toContain(pick!.node.id);
-    }
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
+    expect(pick).toBeNull();
+  });
+
+  it("overseas 入口：组内有 overseas 标签节点 → 从中选", async () => {
+    const env = stubEnv(1, ["n-overseas", "n-cu"]);
+    mockNodeHealth(new Set(["n-overseas", "n-cu"]));
+    const nodes = [makeNode("n-overseas", ["overseas"]), makeNode("n-cu", ["cu"])];
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
+    expect(pick).not.toBeNull();
+    expect(pick!.node.id).toBe("n-overseas");
+    expect(pick!.ispMatched).toBe(true);
   });
 });
