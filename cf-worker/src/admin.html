@@ -420,11 +420,14 @@
         place-items: center;
         padding: 24px;
         z-index: 100;
+        overflow-y: auto;
         animation: fade-in 0.15s ease-out;
       }
       .modal {
         width: 100%;
         max-width: 440px;
+        /* auto margin 优先于 place-items：超高时（矮屏/键盘弹起）可双向滚动而非裁切 */
+        margin: auto;
         background: var(--color-surface);
         border: 1px solid var(--color-border);
         border-radius: var(--radius-2xl);
@@ -1198,7 +1201,7 @@
               <div class="modal-body">
                 <div class="field">
                   <label>组名</label>
-                  <input id="gm-name" value="${isEdit ? escapeHtml(group.name) : ""}" placeholder="例如 main" autofocus />
+                  <input id="gm-name" value="${isEdit ? escapeHtml(group.name) : ""}" placeholder="例如 main" />
                 </div>
                 <div class="field">
                   <label>成员节点 <span class="hint">可多选；勾选后该组正常负载只在这些 node 上</span></label>
@@ -1217,6 +1220,8 @@
           </div>
         `;
         wireModal(root);
+        // 宽屏才自动聚焦组名，手机端避免打开弹窗即弹键盘遮挡内容
+        if (window.innerWidth > 768) root.querySelector("#gm-name").focus();
         const memberCbs = Array.from(root.querySelectorAll(".gm-member"));
         const backupCbs = Array.from(root.querySelectorAll(".gm-backup"));
         // 两区互斥：已勾入一区的节点，另一区同名选项置灰禁用，取消勾选后恢复可选
