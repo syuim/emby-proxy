@@ -339,6 +339,70 @@ export async function handleDeleteEmby(env: Env, name: string): Promise<Response
 // ---------- 代理组 ----------
 // 组/成员/isp 标签只影响 Worker 路由，不进节点 snapshot → 全部不 bump version、不 fanout。
 
+interface MemberSet {
+  primary: string[];
+  backup: string[];
+}
+
+function emptyMembers(): MemberSet {
+  return { primary: [], backup: [] };
+}
+
+// 解析 body 中的成员集合：显式传才更新（未传的字段取 cur 值，避免半更新清空另一集合）。
+function parseMemberSets(
+  body: any,
+  nodes: NodesKV,
+  cur: MemberSet,
+): { ok: true; value: MemberSet } | { ok: false; error: string } {
+  const known = new Set(nodes.nodes.map((n) => n.id));
+  const next: MemberSet = { primary: cur.primary, backup: cur.backup };
+  const fields: { key: keyof MemberSet; field: string }[] = [
+    { key: "primary", field: "node_ids" },
+    { key: "backup", field: "backup_node_ids" },
+  ];
+  for (const { key, field } of fields) {
+    const raw = body[field];
+    if (raw === undefined) continue;
+    if (!Array.isArray(raw) || raw.some((x: unknown) => typeof x !== "string")) {
+      return { ok: false, error: `${field} 必须是节点 id 数组` };
+    }
+    const ids = [...new Set(raw as string[])];
+    const unknown = ids.filter((x) => !known.has(x));
+    if (unknown.length > 0) {
+      return { ok: false, error: `未知节点: ${unknown.join(", ")}` };
+    }
+    next[key] = ids;
+  }
+  const overlap = next.primary.filter((x) => next.backup.includes(x));
+  if (overlap.length > 0) {
+    return { ok: false, error: `节点不能同时作为成员与备用节点: ${overlap.join(", ")}` };
+  }
+  return { ok: true, value: next };
+}
+
+function memberStmts(
+  env: Env,
+  members: MemberSet,
+  groupRef: { id: number } | { name: string },
+): D1PreparedStatement[] {
+  const rows: { node_id: string; is_backup: number }[] = [
+    ...members.primary.map((node_id) => ({ node_id, is_backup: 0 })),
+    ...members.backup.map((node_id) => ({ node_id, is_backup: 1 })),
+  ];
+  if ("id" in groupRef) {
+    return rows.map(({ node_id, is_backup }) =>
+      env.EMBY_DB.prepare(
+        "INSERT INTO node_groups(node_id, group_id, is_backup) VALUES(?,?,?)",
+      ).bind(node_id, groupRef.id, is_backup),
+    );
+  }
+  return rows.map(({ node_id, is_backup }) =>
+    env.EMBY_DB.prepare(
+      "INSERT INTO node_groups(node_id, group_id, is_backup) VALUES(?, (SELECT id FROM proxy_groups WHERE name = ?), ?)",
+    ).bind(node_id, groupRef.name, is_backup),
+  );
+}
+
 export async function handleListGroups(env: Env): Promise<Response> {
   const groups = await readGroupsWithMembers(env);
   return json(200, { groups });
@@ -354,33 +418,22 @@ export async function handleCreateGroup(req: JsonRequest, env: Env): Promise<Res
   if (groups.some((g) => g.name === v)) {
     return json(400, { error: `组 '${v}' 已存在` });
   }
-  let nodeIds: string[] = [];
-  if (req.body?.node_ids !== undefined) {
-    if (!Array.isArray(req.body.node_ids) || req.body.node_ids.some((x: unknown) => typeof x !== "string")) {
-      return json(400, { error: "node_ids 必须是节点 id 数组" });
-    }
-    const known = new Set(nodes.nodes.map((n) => n.id));
-    const unknown = req.body.node_ids.filter((x: string) => !known.has(x));
-    if (unknown.length > 0) {
-      return json(400, { error: `未知节点: ${unknown.join(", ")}` });
-    }
-    nodeIds = req.body.node_ids as string[];
-  }
-  const stmts: D1PreparedStatement[] = [
-    env.EMBY_DB.prepare(
-      "INSERT INTO proxy_groups(name, created_at) VALUES(?,?)",
-    ).bind(v, new Date().toISOString()),
-  ];
-  for (const nid of nodeIds) {
-    stmts.push(
-      env.EMBY_DB.prepare(
-        "INSERT INTO node_groups(node_id, group_id) VALUES(?, (SELECT id FROM proxy_groups WHERE name = ?))",
-      ).bind(nid, v),
-    );
-  }
-  await env.EMBY_DB.batch(stmts);
+  const parsed = parseMemberSets(req.body ?? {}, nodes, emptyMembers());
+  if (!parsed.ok) return json(400, { error: parsed.error });
+  const members = parsed.value;
+
+  await env.EMBY_DB.batch([
+    env.EMBY_DB.prepare("INSERT INTO proxy_groups(name, created_at) VALUES(?,?)").bind(
+      v,
+      new Date().toISOString(),
+    ),
+    ...memberStmts(env, members, { name: v }),
+  ]);
   const created = (await readGroups(env)).find((g) => g.name === v);
-  return json(201, { ok: true, group: { ...created!, node_ids: nodeIds } });
+  return json(201, {
+    ok: true,
+    group: { ...created!, node_ids: members.primary, backup_node_ids: members.backup },
+  });
 }
 
 export async function handleUpdateGroup(
@@ -397,7 +450,7 @@ export async function handleUpdateGroup(
   if (!group) return json(404, { error: "组不存在" });
 
   const stmts: D1PreparedStatement[] = [];
-  const { name, node_ids } = req.body ?? {};
+  const { name } = req.body ?? {};
 
   if (name !== undefined) {
     const v = typeof name === "string" ? name.trim() : "";
@@ -413,34 +466,46 @@ export async function handleUpdateGroup(
     }
   }
 
-  let membershipChanged = false;
-  if (node_ids !== undefined) {
-    if (!Array.isArray(node_ids) || node_ids.some((x) => typeof x !== "string")) {
-      return json(400, { error: "node_ids 必须是节点 id 数组" });
-    }
-    const known = new Set(nodes.nodes.map((n) => n.id));
-    const unknown = node_ids.filter((x: string) => !known.has(x));
-    if (unknown.length > 0) {
-      return json(400, { error: `未知节点: ${unknown.join(", ")}` });
-    }
-    const cur = new Set(members.find((g) => g.id === id)?.node_ids ?? []);
-    const next = new Set(node_ids as string[]);
-    if (cur.size !== next.size || [...cur].some((x) => !next.has(x))) {
+  const curGroup = members.find((g) => g.id === id);
+  const finalMembers: MemberSet = {
+    primary: curGroup?.node_ids ?? [],
+    backup: curGroup?.backup_node_ids ?? [],
+  };
+  if (req.body?.node_ids !== undefined || req.body?.backup_node_ids !== undefined) {
+    const parsed = parseMemberSets(req.body ?? {}, nodes, finalMembers);
+    if (!parsed.ok) return json(400, { error: parsed.error });
+    const next = parsed.value;
+    const curSet = new Set([
+      ...finalMembers.primary.map((x) => `0:${x}`),
+      ...finalMembers.backup.map((x) => `1:${x}`),
+    ]);
+    const nextSet = new Set([
+      ...next.primary.map((x) => `0:${x}`),
+      ...next.backup.map((x) => `1:${x}`),
+    ]);
+    if (
+      curSet.size !== nextSet.size ||
+      [...curSet].some((x) => !nextSet.has(x)) ||
+      [...nextSet].some((x) => !curSet.has(x))
+    ) {
       stmts.push(env.EMBY_DB.prepare("DELETE FROM node_groups WHERE group_id = ?").bind(id));
-      for (const nid of next) {
-        stmts.push(
-          env.EMBY_DB.prepare("INSERT INTO node_groups(node_id, group_id) VALUES(?,?)").bind(nid, id),
-        );
-      }
-      membershipChanged = true;
+      stmts.push(...memberStmts(env, next, { id }));
     }
+    finalMembers.primary = next.primary;
+    finalMembers.backup = next.backup;
   }
 
   if (stmts.length === 0) return json(200, { ok: true, skipped: true });
   await env.EMBY_DB.batch(stmts);
   return json(200, {
     ok: true,
-    group: { id, name: group.name, created_at: group.created_at, node_ids: membershipChanged ? (node_ids as string[]) : undefined },
+    group: {
+      id,
+      name: group.name,
+      created_at: group.created_at,
+      node_ids: finalMembers.primary,
+      backup_node_ids: finalMembers.backup,
+    },
   });
 }
 

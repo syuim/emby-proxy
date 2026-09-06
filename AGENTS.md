@@ -64,9 +64,9 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 修改 emby 字段请使用定向 `UPDATE`，不要走整表 DELETE + 重插。整表 DELETE + 重插是单个事务，任意一行写入失败会静默回滚全部改动。
 
-### 代理组相关（migration 0007）
+### 代理组相关（migration 0007 / 0012）
 
-`0007_proxy_groups_isp.sql` 新增：`nodes.isp_tags`（JSON 字符串数组 `["ct","cu","cm"]`，空数组 = 未标注/任何网络可选）、`proxy_groups` 表、`node_groups`（node ↔ 组多对多，无外键，应用层维护）、`embys.group_id`（可空，`NULL` = 未绑定组）。
+`0007_proxy_groups_isp.sql` 新增：`nodes.isp_tags`（JSON 字符串数组 `["ct","cu","cm"]`，空数组 = 未标注/任何网络可选）、`proxy_groups` 表、`node_groups`（node ↔ 组多对多，无外键，应用层维护）、`embys.group_id`（可空，`NULL` = 未绑定组）。`0012_node_groups_backup.sql` 为 `node_groups` 增加 `is_backup` 列（0 = 主成员，1 = 备用节点；备用仅在组内主成员全部失效时启用，不参与常规负载）。同一 node 不能同时为主成员与备用节点，互斥由 API/UI 层校验；成员变更走全量覆盖（`DELETE FROM node_groups WHERE group_id = ?` + 重插），PUT 只显式传一侧字段时另一侧保持现状。
 
 组/ISP 标签只影响 Worker 侧路由决策，**不进入 sync 协议**（节点 snapshot 仍是 path_prefix/backend_url），因此组 CRUD、成员变更、node isp_tags 编辑、emby 绑定/解绑组均**不 bump version、不 fan-out**。删组时应用层把引用它的 `embys.group_id` 置 NULL；删节点时清理 `node_groups` 关联。
 
@@ -92,21 +92,22 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 代理模式是全局配置（`config_meta.proxy_mode`，管理 UI 顶部切换）：`node` / `local`（Worker 代理）/ `direct`（直连）。**节点只通过代理组使用**：node 模式下绑组 emby 走代理组路由，未绑组 emby 直接 Worker local（不探测任何节点）。全局节点选择 / `active_node_id` / 故障转移机制已移除（migration 0008 删除 `config_meta.active_node_id` 列）。`embys.node_id` 仅保留一个用途：`'local'` 标记自动注册的 d_xxx emby（地址访问回流产物，始终强制 Worker 本地代理，不受全局模式影响）。
 
-- **绑组 emby（node 模式）**：组内每请求并发存活探测（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），按入口 ISP 过滤后随机 307 到节点；组不存在/无成员/全灭 → Worker local 兜底。
+- **绑组 emby（node 模式）**：组内每请求并发存活探测（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），按入口 ISP 过滤后随机 307 到节点；组内主成员全部失效（含禁用）时启用备用节点池（同样探测 + ISP 过滤后随机）；备用也全灭/组不存在/无主无备 → Worker local 兜底。
 - **未绑组 emby（node 模式）**：直接 Worker local（日志 `mode=local reason=no-group`）。
 - **本地代理**：Worker 直接 fetch 后端回传，隐藏客户端真实 IP，并对后端 302 / PlaybackInfo / M3U8 切片里的绝对 URL 做同源/跨域改写：同源改写为名称形式 `/emby/<name>/path`，跨域（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。
 - 全局模式切换（PUT `/admin/api/config`）只改 `config_meta.proxy_mode`，不写 `embys` 表，也不 bump version / fan-out（节点 snapshot 只含 path_prefix/backend_url，与模式无关）。
 
 ### 代理组路由（per-emby，仅 node 模式下生效）
 
-`proxy_mode = 'node'` 且 `embys.group_id` 非空时，该 emby 走组路由（`src/group.ts`）；未绑组 emby 直接 Worker local：
+`proxy_mode = 'node'` 且 `embys.group_id` 非空时，该 emby 走组路由（`src/group.ts`，`chooseNodeFromGroup`）；未绑组 emby 直接 Worker local：
 
-1. 取组内 node（`node_groups` 成员）；组不存在/无成员 → Worker local 兜底。
-2. 组内成员**每请求并发存活探测**（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），得存活集合。
+1. 取组内 node：主成员（`is_backup=0`）与备用节点（`is_backup=1`）分开成两级池；两池皆空 → Worker local 兜底。
+2. 主成员池**每请求并发存活探测**（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），得存活集合。
 3. **入口网络判定**：`request.cf.asn` 查 `isp.ts` 表（未命中用 `asOrganization` 强关键字二次兜底），输出 ct/cu/cm/overseas。
-4. **软过滤 + 纯随机**：在存活集合里按 ISP 过滤（node 无标签 = 全兼容）；过滤后为空则回退组内全部存活 node（宁可错配不断流）；最后每请求纯随机挑一个，307 到该 node。
-5. **overseas（海外）入口**：只在标注 `overseas` 或未标注的 node 中选；组内无匹配 → **不回退其他 ISP node**，直接 Worker local。
-6. **全灭兜底**：组内无存活 node → Worker local 代理兜底。cron 探活本就全量探测所有 node（与组无关），health 表天然覆盖组内成员。
+4. **软过滤 + 纯随机**：在存活集合里按 ISP 过滤（node 无标签 = 全兼容）；过滤后为空则回退该池全部存活 node（宁可错配不断流）；最后每请求纯随机挑一个，307 到该 node（日志含 `stage=primary`）。
+5. **overseas（海外）入口**：只在标注 `overseas` 或未标注的 node 中选；主池存活但无匹配 → **不回退其他 ISP node、也不启用备用**，直接 Worker local。
+6. **备用回退**：主池存活集合为空（全灭/全禁用/无主成员）且组配置了备用节点 → 对备用池执行与主池相同的探测 + ISP 软过滤 + overseas 特判，命中则 307 到备用 node（日志 `stage=backup`）。
+7. **全灭兜底**：备用池也无存活/无匹配 → Worker local 代理兜底。cron 探活本就全量探测所有 node（与组无关），health 表天然覆盖组内主备成员。
 
 全局模式（local/direct）优先于组：绑组 emby 在全局 local/direct 下仍走全局语义。
 

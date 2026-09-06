@@ -1110,7 +1110,7 @@
               <h2>代理组列表</h2>
               <button class="btn btn-primary" id="g-add">+ 组</button>
             </div>
-            <p class="hint" style="margin:-6px 0 14px;">绑定组后 emby 按入口网络（电信/联通/移动）匹配组内 node 随机负载；未标注网络的 node 任何网络可选</p>
+            <p class="hint" style="margin:-6px 0 14px;">绑定组后 emby 按入口网络（电信/联通/移动）匹配组内 node 随机负载；未标注网络的 node 任何网络可选。备用节点（虚线标示）仅在成员节点全部失效时启用，全部失效则回 Worker 本地代理</p>
             ${state.groups.length === 0
               ? '<div class="empty"><div class="empty-icon">🗂</div>还没有代理组</div>'
               : `<div class="table-wrap"><table>
@@ -1122,12 +1122,18 @@
                       const members = (g.node_ids || [])
                         .map((id) => state.nodes.find((n) => n.id === id))
                         .filter(Boolean);
+                      const backups = (g.backup_node_ids || [])
+                        .map((id) => state.nodes.find((n) => n.id === id))
+                        .filter(Boolean);
                       return `
                         <tr data-gid="${g.id}">
                           <td><strong>${escapeHtml(g.name)}</strong></td>
-                          <td style="max-width:520px;">${members.length === 0
+                          <td style="max-width:520px;">${members.length === 0 && backups.length === 0
                             ? '<span class="badge unknown">无成员</span>'
-                            : members.map((n) => `<span class="badge" style="${ISP_CHIP_STYLE}">${escapeHtml(n.name)}</span>`).join(" ")}</td>
+                            : [
+                                ...members.map((n) => `<span class="badge" style="${ISP_CHIP_STYLE}">${escapeHtml(n.name)}</span>`),
+                                ...backups.map((n) => `<span class="badge" style="${ISP_CHIP_STYLE};border-style:dashed;opacity:.75;" title="备用节点">备·${escapeHtml(n.name)}</span>`),
+                              ].join(" ")}</td>
                           <td title="${escapeHtml(g.created_at)}">${escapeHtml(relTime(g.created_at))}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
@@ -1167,6 +1173,15 @@
       function openGroupModal(group) {
         const root = document.getElementById("modal-root");
         const isEdit = !!group;
+        const memberSet = new Set(isEdit ? group.node_ids || [] : []);
+        const backupSet = new Set(isEdit ? group.backup_node_ids || [] : []);
+        const chipRow = (cls, checkedSet) => state.nodes.length === 0
+          ? '<p class="hint" style="margin:0;">暂无节点，请先在下方节点列表添加</p>'
+          : `<div style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;">${state.nodes.map((n) => `
+              <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
+                <input type="checkbox" class="${cls}" data-nid="${escapeHtml(n.id)}" ${checkedSet.has(n.id) ? "checked" : ""} />
+                ${escapeHtml(n.name)}${n.disabled ? ' <span class="hint">(已禁用)</span>' : ""}
+              </label>`).join("")}</div>`;
         root.innerHTML = `
           <div class="modal-overlay">
             <div class="modal">
@@ -1180,17 +1195,12 @@
                   <input id="gm-name" value="${isEdit ? escapeHtml(group.name) : ""}" placeholder="例如 main" autofocus />
                 </div>
                 <div class="field">
-                  <label>成员节点 <span class="hint">可多选；勾选后该组只在这些 node 上负载均衡</span></label>
-                  ${state.nodes.length === 0
-                    ? '<p class="hint" style="margin:0;">暂无节点，请先在下方节点列表添加</p>'
-                    : `<div style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;">
-                        ${state.nodes.map((n) => `
-                          <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
-                            <input type="checkbox" class="gm-member" data-nid="${escapeHtml(n.id)}" ${isEdit && (group.node_ids || []).includes(n.id) ? "checked" : ""} />
-                            ${escapeHtml(n.name)}${n.disabled ? ' <span class="hint">(已禁用)</span>' : ""}
-                          </label>
-                        `).join("")}
-                      </div>`}
+                  <label>成员节点 <span class="hint">可多选；勾选后该组正常负载只在这些 node 上</span></label>
+                  ${chipRow("gm-member", memberSet)}
+                </div>
+                <div class="field">
+                  <label>备用节点 <span class="hint">仅在成员节点全部失效时启用；同一节点不能同时勾入两区</span></label>
+                  ${chipRow("gm-backup", backupSet)}
                 </div>
                 <div class="modal-footer">
                   <button class="btn btn-ghost" data-close>取消</button>
@@ -1201,23 +1211,34 @@
           </div>
         `;
         wireModal(root);
+        const memberCbs = Array.from(root.querySelectorAll(".gm-member"));
+        const backupCbs = Array.from(root.querySelectorAll(".gm-backup"));
+        const uncheckTwin = (list, nid) => {
+          const twin = list.find((x) => x.dataset.nid === nid);
+          if (twin) twin.checked = false;
+        };
+        memberCbs.forEach((cb) => cb.addEventListener("change", () => {
+          if (cb.checked) uncheckTwin(backupCbs, cb.dataset.nid);
+        }));
+        backupCbs.forEach((cb) => cb.addEventListener("change", () => {
+          if (cb.checked) uncheckTwin(memberCbs, cb.dataset.nid);
+        }));
         root.querySelector("#gm-save").onclick = async () => {
           const name = (root.querySelector("#gm-name").value || "").trim();
           if (!name) { toast("组名不能为空", "err"); return; }
-          const nodeIds = Array.from(root.querySelectorAll(".gm-member"))
-            .filter((x) => x.checked)
-            .map((x) => x.dataset.nid);
+          const nodeIds = memberCbs.filter((x) => x.checked).map((x) => x.dataset.nid);
+          const backupIds = backupCbs.filter((x) => x.checked).map((x) => x.dataset.nid);
           try {
             if (isEdit) {
               await api("/emby/admin/api/groups/" + group.id, {
                 method: "PUT",
-                body: JSON.stringify({ name, node_ids: nodeIds }),
+                body: JSON.stringify({ name, node_ids: nodeIds, backup_node_ids: backupIds }),
               });
               toast(`已保存组：${name}`, "ok");
             } else {
               await api("/emby/admin/api/groups", {
                 method: "POST",
-                body: JSON.stringify({ name, node_ids: nodeIds }),
+                body: JSON.stringify({ name, node_ids: nodeIds, backup_node_ids: backupIds }),
               });
               toast(`已创建组：${name}`, "ok");
             }

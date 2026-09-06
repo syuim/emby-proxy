@@ -21,6 +21,8 @@ export interface ProxyGroup {
 
 export interface ProxyGroupWithMembers extends ProxyGroup {
   node_ids: string[];
+  // 备用节点：组内主成员全部失效时才启用，不参与常规负载
+  backup_node_ids: string[];
 }
 
 export interface EmbyRecord {

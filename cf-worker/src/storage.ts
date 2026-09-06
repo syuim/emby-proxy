@@ -102,27 +102,51 @@ export async function readGroupsWithMembers(env: Env): Promise<ProxyGroupWithMem
     env.EMBY_DB.prepare(
       "SELECT id, name, created_at FROM proxy_groups ORDER BY name, id",
     ),
-    env.EMBY_DB.prepare("SELECT group_id, node_id FROM node_groups"),
+    env.EMBY_DB.prepare(
+      "SELECT group_id, node_id, is_backup FROM node_groups",
+    ),
   ]);
   const list: ProxyGroupWithMembers[] = (groups.results ?? []).map((r: any) => ({
     id: r.id as number,
     name: r.name as string,
     created_at: r.created_at as string,
     node_ids: [],
+    backup_node_ids: [],
   }));
   const byId = new Map(list.map((g) => [g.id, g]));
-  for (const m of (members.results ?? []) as { group_id: number; node_id: string }[]) {
-    byId.get(m.group_id)?.node_ids.push(m.node_id);
+  for (const m of (members.results ?? []) as {
+    group_id: number;
+    node_id: string;
+    is_backup: number;
+  }[]) {
+    const g = byId.get(m.group_id);
+    if (!g) continue;
+    (m.is_backup === 1 ? g.backup_node_ids : g.node_ids).push(m.node_id);
   }
   return list;
 }
 
-export async function readGroupNodeIds(env: Env, groupId: number): Promise<string[]> {
+export interface GroupNodeIds {
+  primary: string[];
+  backup: string[];
+}
+
+export async function readGroupNodeIds(
+  env: Env,
+  groupId: number,
+): Promise<GroupNodeIds> {
   const res = await env.EMBY_DB.prepare(
-    "SELECT node_id FROM node_groups WHERE group_id = ?",
-  ).bind(groupId).all<{ node_id: string }>();
-  if (!res.success || !res.results) return [];
-  return res.results.map((r) => r.node_id);
+    "SELECT node_id, is_backup FROM node_groups WHERE group_id = ?",
+  )
+    .bind(groupId)
+    .all<{ node_id: string; is_backup: number }>();
+  if (!res.success || !res.results) return { primary: [], backup: [] };
+  const primary: string[] = [];
+  const backup: string[] = [];
+  for (const r of res.results) {
+    (r.is_backup === 1 ? backup : primary).push(r.node_id);
+  }
+  return { primary, backup };
 }
 
 export async function readHealth(env: Env): Promise<HealthKV> {

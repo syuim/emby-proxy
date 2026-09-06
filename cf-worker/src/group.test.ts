@@ -14,13 +14,16 @@ function makeNode(id: string, ispTags: string[] = [], disabled = false): NodeRec
   };
 }
 
-function stubEnv(groupId: number, memberIds: string[]): Env {
+function stubEnv(groupId: number, primary: string[], backup: string[] = []): Env {
   const db = {
     prepare: () => ({
       bind: () => ({
         all: async () => ({
           success: true,
-          results: memberIds.map((nodeId) => ({ node_id: nodeId })),
+          results: [
+            ...primary.map((nodeId) => ({ node_id: nodeId, is_backup: 0 })),
+            ...backup.map((nodeId) => ({ node_id: nodeId, is_backup: 1 })),
+          ],
         }),
         run: async () => ({ success: true, meta: {} }),
         first: async () => null,
@@ -163,5 +166,84 @@ describe("chooseNodeFromGroup", () => {
     const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
     expect(pick).not.toBeNull();
     expect(pick!.node.id).toBe("n-overseas");
+  });
+
+  // ---------- 备用节点 ----------
+
+  it("主成员全灭 + 备用存活 → 启用备用池（stage=backup）", async () => {
+    const env = stubEnv(1, ["n-main"], ["n-back"]);
+    mockNodeHealth(new Set(["n-back"]));
+    const nodes = [makeNode("n-main", ["ct"]), makeNode("n-back", ["ct"])];
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+    expect(pick).not.toBeNull();
+    expect(pick!.node.id).toBe("n-back");
+    expect(pick!.stage).toBe("backup");
+  });
+
+  it("主成员存活时备用节点不参与选择（stage=primary）", async () => {
+    const env = stubEnv(1, ["n-main", "n-main2"], ["n-back"]);
+    mockNodeHealth(new Set(["n-main", "n-main2", "n-back"]));
+    const nodes = [
+      makeNode("n-main", ["ct"]),
+      makeNode("n-main2", ["ct"]),
+      makeNode("n-back", ["ct"]),
+    ];
+    for (let i = 0; i < 20; i++) {
+      const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+      expect(pick).not.toBeNull();
+      expect(["n-main", "n-main2"]).toContain(pick!.node.id);
+      expect(pick!.stage).toBe("primary");
+    }
+  });
+
+  it("主成员全灭 + 备用也全灭 → null", async () => {
+    const env = stubEnv(1, ["n-main"], ["n-back"]);
+    mockNodeHealth(new Set());
+    const nodes = [makeNode("n-main", ["ct"]), makeNode("n-back", ["ct"])];
+    expect(await chooseNodeFromGroup(env, 1, nodes, "ct")).toBeNull();
+  });
+
+  it("组无主成员仅配置备用节点 → 备用直接当主用", async () => {
+    const env = stubEnv(1, [], ["n-back"]);
+    mockNodeHealth(new Set(["n-back"]));
+    const nodes = [makeNode("n-back", ["ct"])];
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+    expect(pick).not.toBeNull();
+    expect(pick!.node.id).toBe("n-back");
+    expect(pick!.stage).toBe("backup");
+  });
+
+  it("overseas 入口：主存活但无匹配 → null（不启用备用）", async () => {
+    const env = stubEnv(1, ["n-main"], ["n-back"]);
+    mockNodeHealth(new Set(["n-main", "n-back"]));
+    const nodes = [
+      makeNode("n-main", ["ct"]),
+      makeNode("n-back", ["overseas"]),
+    ];
+    expect(await chooseNodeFromGroup(env, 1, nodes, "overseas")).toBeNull();
+  });
+
+  it("overseas 入口：主全灭 + 备用含 overseas 标签 → 选备用", async () => {
+    const env = stubEnv(1, ["n-main"], ["n-os", "n-cu"]);
+    mockNodeHealth(new Set(["n-os", "n-cu"]));
+    const nodes = [
+      makeNode("n-main", ["ct"]),
+      makeNode("n-os", ["overseas"]),
+      makeNode("n-cu", ["cu"]),
+    ];
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
+    expect(pick).not.toBeNull();
+    expect(pick!.node.id).toBe("n-os");
+    expect(pick!.stage).toBe("backup");
+  });
+
+  it("主成员全部禁用 + 备用存活 → 选备用", async () => {
+    const env = stubEnv(1, ["n-main"], ["n-back"]);
+    mockNodeHealth(new Set(["n-main", "n-back"]));
+    const nodes = [makeNode("n-main", ["ct"], true), makeNode("n-back", ["ct"])];
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+    expect(pick).not.toBeNull();
+    expect(pick!.node.id).toBe("n-back");
+    expect(pick!.stage).toBe("backup");
   });
 });

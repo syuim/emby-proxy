@@ -58,7 +58,7 @@ export async function handleClientRequest(
       const groups = await readGroups(env);
       const groupName = groups.find((g) => g.id === emby.group_id)?.name ?? String(emby.group_id);
       console.log(
-        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=group group=${groupName} alive=${pick.aliveNames.join(",")} pool=${pick.poolNames.join(",")} node=${pick.node.name}`,
+        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=group group=${groupName} stage=${pick.stage} alive=${pick.aliveNames.join(",")} pool=${pick.poolNames.join(",")} node=${pick.node.name}`,
       );
       // 节点协议路径不含 /emby 前缀：/<name>/subpath
       const nodeTarget = buildTargetUrl(pick.node.public_url, "/" + emby.name + subpath, url.search);
