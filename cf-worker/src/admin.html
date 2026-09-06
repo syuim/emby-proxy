@@ -255,6 +255,9 @@
         color: var(--color-text-muted);
         font-weight: 500;
       }
+      /* 组弹窗节点 chip：已勾入另一区的同名节点置灰，互斥可视化 */
+      .node-chip { cursor: pointer; }
+      .node-chip:has(input:disabled) { opacity: 0.55; cursor: not-allowed; }
       input, select, textarea {
         font-family: inherit;
         font-size: 13px;
@@ -1178,7 +1181,7 @@
         const chipRow = (cls, checkedSet) => state.nodes.length === 0
           ? '<p class="hint" style="margin:0;">暂无节点，请先在下方节点列表添加</p>'
           : `<div style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;">${state.nodes.map((n) => `
-              <label title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
+              <label class="node-chip" title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
                 <input type="checkbox" class="${cls}" data-nid="${escapeHtml(n.id)}" ${checkedSet.has(n.id) ? "checked" : ""} />
                 ${escapeHtml(n.name)}${n.disabled ? ' <span class="hint">(已禁用)</span>' : ""}
               </label>`).join("")}</div>`;
@@ -1199,7 +1202,7 @@
                   ${chipRow("gm-member", memberSet)}
                 </div>
                 <div class="field">
-                  <label>备用节点 <span class="hint">仅在成员节点全部失效时启用；同一节点不能同时勾入两区</span></label>
+                  <label>备用节点 <span class="hint">仅在成员节点全部失效时启用；同一节点勾入一区后，另一区同名选项置灰不可选</span></label>
                   ${chipRow("gm-backup", backupSet)}
                 </div>
                 <div class="modal-footer">
@@ -1213,16 +1216,16 @@
         wireModal(root);
         const memberCbs = Array.from(root.querySelectorAll(".gm-member"));
         const backupCbs = Array.from(root.querySelectorAll(".gm-backup"));
-        const uncheckTwin = (list, nid) => {
-          const twin = list.find((x) => x.dataset.nid === nid);
-          if (twin) twin.checked = false;
+        // 两区互斥：已勾入一区的节点，另一区同名选项置灰禁用，取消勾选后恢复可选
+        const syncTwinState = () => {
+          const memberNids = new Set(memberCbs.filter((c) => c.checked).map((c) => c.dataset.nid));
+          const backupNids = new Set(backupCbs.filter((c) => c.checked).map((c) => c.dataset.nid));
+          memberCbs.forEach((cb) => { cb.disabled = backupNids.has(cb.dataset.nid); });
+          backupCbs.forEach((cb) => { cb.disabled = memberNids.has(cb.dataset.nid); });
         };
-        memberCbs.forEach((cb) => cb.addEventListener("change", () => {
-          if (cb.checked) uncheckTwin(backupCbs, cb.dataset.nid);
-        }));
-        backupCbs.forEach((cb) => cb.addEventListener("change", () => {
-          if (cb.checked) uncheckTwin(memberCbs, cb.dataset.nid);
-        }));
+        memberCbs.forEach((cb) => cb.addEventListener("change", syncTwinState));
+        backupCbs.forEach((cb) => cb.addEventListener("change", syncTwinState));
+        syncTwinState();
         root.querySelector("#gm-save").onclick = async () => {
           const name = (root.querySelector("#gm-name").value || "").trim();
           if (!name) { toast("组名不能为空", "err"); return; }
