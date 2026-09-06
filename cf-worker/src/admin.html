@@ -471,6 +471,8 @@
       td.mono { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .only-sm { display: none; }
       .col-actions { width: 1%; white-space: nowrap; }
+      /* 组行成员/备用徽章容器：flex 换行，避免窄屏横向滚动与 sticky 操作列遮挡 */
+      .gm-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
 
       /* ============ Responsive ============ */
       @media (max-width: 768px) {
@@ -489,6 +491,7 @@
         .tabs-row { flex-wrap: wrap; gap: 8px; }
 
         th, td { padding: 8px 10px; white-space: nowrap; }
+        .gm-cell { white-space: normal; }
         thead th { font-size: 10px; }
 
         .modal { padding: 20px; }
@@ -1131,12 +1134,12 @@
                       return `
                         <tr data-gid="${g.id}">
                           <td><strong>${escapeHtml(g.name)}</strong></td>
-                          <td style="max-width:520px;">${members.length === 0 && backups.length === 0
+                          <td class="gm-cell" style="max-width:520px;">${members.length === 0 && backups.length === 0
                             ? '<span class="badge unknown">无成员</span>'
-                            : [
+                            : `<div class="gm-chips">${[
                                 ...members.map((n) => `<span class="badge" style="${ISP_CHIP_STYLE}">${escapeHtml(n.name)}</span>`),
                                 ...backups.map((n) => `<span class="badge" style="${ISP_CHIP_STYLE};border-style:dashed;opacity:.75;" title="备用节点">备·${escapeHtml(n.name)}</span>`),
-                              ].join(" ")}</td>
+                              ].join("")}</div>`}</td>
                           <td title="${escapeHtml(g.created_at)}">${escapeHtml(relTime(g.created_at))}</td>
                           <td class="actions">
                             <button class="btn btn-ghost" data-act="edit">编辑</button>
