@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { __resetAliveCacheForTests } from "./alive";
-import { chooseNodeFromGroup, filterGroupPool } from "./group";
+import { chooseNodeFromGroup, matchIspPool } from "./group";
 import type { Env, NodeRecord } from "./types";
 
 function makeNode(id: string, ispTags: string[] = [], disabled = false): NodeRecord {
@@ -56,7 +56,7 @@ function mockNodeHealth(aliveIds: Set<string>) {
   }) as any;
 }
 
-describe("filterGroupPool", () => {
+describe("matchIspPool", () => {
   const nCt = makeNode("n-ct", ["ct"]);
   const nCu = makeNode("n-cu", ["cu"]);
   const nCm = makeNode("n-cm", ["cm"]);
@@ -65,28 +65,23 @@ describe("filterGroupPool", () => {
   const alive = [nCt, nCu, nCm, nAny, nAll];
 
   it("isp=ct 只保留 ct 标签与未标注 node", () => {
-    const { pool, matched } = filterGroupPool(alive, "ct");
-    expect(pool.map((n) => n.id)).toEqual(["n-ct", "n-any", "n-all"]);
-    expect(matched).toBe(true);
+    expect(matchIspPool(alive, "ct").map((n) => n.id)).toEqual(["n-ct", "n-any", "n-all"]);
   });
 
   it("isp=overseas 只保留 overseas 标签与未标注 node", () => {
     const nOs = makeNode("n-os", ["overseas"]);
-    const { pool, matched } = filterGroupPool([...alive, nOs], "overseas");
-    expect(pool.map((n) => n.id)).toEqual(["n-any", "n-os"]);
-    expect(matched).toBe(true);
+    expect(matchIspPool([...alive, nOs], "overseas").map((n) => n.id)).toEqual([
+      "n-any",
+      "n-os",
+    ]);
   });
 
-  it("组内无匹配 ISP → 回退全部存活 node 并标记 matched=false", () => {
-    const { pool, matched } = filterGroupPool([nCu, nCm], "ct");
-    expect(pool.map((n) => n.id)).toEqual(["n-cu", "n-cm"]);
-    expect(matched).toBe(false);
+  it("无匹配 → 空数组（不回退；回退由路由上层决策）", () => {
+    expect(matchIspPool([nCu, nCm], "ct")).toEqual([]);
   });
 
   it("匹配集非空时不回退（cu 组 + ct 入口保留 cu 池）", () => {
-    const { pool, matched } = filterGroupPool([nCt, nCu], "cu");
-    expect(pool.map((n) => n.id)).toEqual(["n-cu"]);
-    expect(matched).toBe(true);
+    expect(matchIspPool([nCt, nCu], "cu").map((n) => n.id)).toEqual(["n-cu"]);
   });
 });
 
@@ -102,14 +97,15 @@ describe("chooseNodeFromGroup", () => {
     }
   });
 
-  it("匹配 ISP 的 node 全不健康 → 回退组内其它存活 node", async () => {
+  it("主节点存活但均无网络匹配（无备用）→ 错配兜底 stage=fallback", async () => {
     const env = stubEnv(1, ["n-ct", "n-cu"]);
-    // 只有 cu 存活，ct 节点已挂
+    // 只有 cu 存活，ct 节点已挂；入口 ct 时主池存活节点均不匹配
     mockNodeHealth(new Set(["n-cu"]));
     const nodes = [makeNode("n-ct", ["ct"]), makeNode("n-cu", ["cu"])];
     const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
     expect(pick).not.toBeNull();
     expect(pick!.node.id).toBe("n-cu");
+    expect(pick!.stage).toBe("fallback");
   });
 
   it("组内 node 全灭 → null", async () => {
@@ -213,14 +209,17 @@ describe("chooseNodeFromGroup", () => {
     expect(pick!.stage).toBe("backup");
   });
 
-  it("overseas 入口：主存活但无匹配 → null（不启用备用）", async () => {
+  it("overseas 入口：主存活但无匹配 + 备用含 overseas → 选备用（stage=backup）", async () => {
     const env = stubEnv(1, ["n-main"], ["n-back"]);
     mockNodeHealth(new Set(["n-main", "n-back"]));
     const nodes = [
       makeNode("n-main", ["ct"]),
       makeNode("n-back", ["overseas"]),
     ];
-    expect(await chooseNodeFromGroup(env, 1, nodes, "overseas")).toBeNull();
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
+    expect(pick).not.toBeNull();
+    expect(pick!.node.id).toBe("n-back");
+    expect(pick!.stage).toBe("backup");
   });
 
   it("overseas 入口：主全灭 + 备用含 overseas 标签 → 选备用", async () => {
@@ -245,5 +244,36 @@ describe("chooseNodeFromGroup", () => {
     expect(pick).not.toBeNull();
     expect(pick!.node.id).toBe("n-back");
     expect(pick!.stage).toBe("backup");
+  });
+
+  // ---------- AS 无匹配时启用备用 ----------
+
+  it("主存活但无网络匹配 + 备用匹配 → 切备用（stage=backup）", async () => {
+    const env = stubEnv(1, ["n-cu"], ["n-back"]);
+    mockNodeHealth(new Set(["n-cu", "n-back"]));
+    const nodes = [makeNode("n-cu", ["cu"]), makeNode("n-back", ["ct"])];
+    const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+    expect(pick).not.toBeNull();
+    expect(pick!.node.id).toBe("n-back");
+    expect(pick!.stage).toBe("backup");
+  });
+
+  it("主存活但无匹配 + 备用也无匹配（国内入口）→ 全存活错配兜底", async () => {
+    const env = stubEnv(1, ["n-cu"], ["n-cm"]);
+    mockNodeHealth(new Set(["n-cu", "n-cm"]));
+    const nodes = [makeNode("n-cu", ["cu"]), makeNode("n-cm", ["cm"])];
+    for (let i = 0; i < 20; i++) {
+      const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+      expect(pick).not.toBeNull();
+      expect(["n-cu", "n-cm"]).toContain(pick!.node.id);
+      expect(pick!.stage).toBe("fallback");
+    }
+  });
+
+  it("主备用均存活但无匹配（overseas 入口）→ null（不跨网错配）", async () => {
+    const env = stubEnv(1, ["n-cu"], ["n-cm"]);
+    mockNodeHealth(new Set(["n-cu", "n-cm"]));
+    const nodes = [makeNode("n-cu", ["cu"]), makeNode("n-cm", ["cm"])];
+    expect(await chooseNodeFromGroup(env, 1, nodes, "overseas")).toBeNull();
   });
 });
