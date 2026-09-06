@@ -476,6 +476,8 @@
       .col-actions { width: 1%; white-space: nowrap; }
       /* 组行成员/备用徽章容器：flex 换行，避免窄屏横向滚动与 sticky 操作列遮挡 */
       .gm-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+      /* 节点行内编辑的 ISP 复选框容器：flex 换行；min-width 防止表格把该列压得过窄 */
+      .n-isp-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-width: 148px; }
 
       /* ============ Responsive ============ */
       @media (max-width: 768px) {
@@ -495,6 +497,7 @@
 
         th, td { padding: 8px 10px; white-space: nowrap; }
         .gm-cell { white-space: normal; }
+        .n-isp-cell { white-space: normal; }
         thead th { font-size: 10px; }
 
         .modal { padding: 20px; }
@@ -567,6 +570,8 @@
         .table-wrap { border-radius: var(--radius-sm); }
         .table-wrap-embys:not(.editing) th:nth-child(3),
         .table-wrap-embys:not(.editing) td:nth-child(3) { display: none; }
+        .table-wrap-nodes th:nth-child(5),
+        .table-wrap-nodes td:nth-child(5) { display: none; }
 
         .toast {
           left: 12px;
@@ -999,12 +1004,12 @@
                               <input class="row-name" value="${escapeHtml(n.name)}" />
                             </div></td>
                             <td><input class="row-url mono" value="${escapeHtml(n.public_url)}" /></td>
-                            <td>
-                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;"><input type="checkbox" class="n-isp" value="ct" ${(n.isp_tags || []).includes("ct") ? "checked" : ""} />电信</label>
-                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;"><input type="checkbox" class="n-isp" value="cu" ${(n.isp_tags || []).includes("cu") ? "checked" : ""} />联通</label>
-                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:8px;"><input type="checkbox" class="n-isp" value="cm" ${(n.isp_tags || []).includes("cm") ? "checked" : ""} />移动</label>
+                            <td class="n-isp-cell"><div class="n-isp-row">
+                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="ct" ${(n.isp_tags || []).includes("ct") ? "checked" : ""} />电信</label>
+                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="cu" ${(n.isp_tags || []).includes("cu") ? "checked" : ""} />联通</label>
+                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="cm" ${(n.isp_tags || []).includes("cm") ? "checked" : ""} />移动</label>
                               <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="overseas" ${(n.isp_tags || []).includes("overseas") ? "checked" : ""} />海外</label>
-                            </td>
+                            </div></td>
                             <td>${statusBadge(n)}</td>
                             <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
                             <td class="actions">
