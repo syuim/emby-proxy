@@ -658,7 +658,10 @@
           api("/emby/admin/api/groups"),
           api("/emby/admin/api/diag"),
         ]);
-        state.nodes = n.nodes || [];
+        state.nodes = (n.nodes || []).sort((a, b) => {
+          if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
+          return a.name.localeCompare(b.name);
+        });
         state.embys = e.embys || [];
         state.groups = g.groups || [];
         state.health = h.nodes || {};
