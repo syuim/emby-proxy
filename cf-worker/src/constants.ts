@@ -17,12 +17,12 @@ export const EMBY_NAME_RE = /^[a-zA-Z0-9_-]{1,32}$/;
 export const EMBY_BASE_PATH = "/emby";
 // 一级功能命名空间：通用 URL 代理 /url?url=...（任意 http(s) 资源，图片/API 均可）
 export const URL_BASE_PATH = "/url";
-// 一级功能命名空间：豆瓣 API 反代 /doubanapi/...（简化版 Go 服务，仅 JSON catalog）
+// 一级功能命名空间：豆瓣 API 别名入口 /doubanapi/...（内部重写为名称访问，见 router.ts）
 export const DOUBAN_API_BASE_PATH = "/doubanapi";
+// /doubanapi 别名对应的 emby 记录名（D1 embys 表：绑代理组后按入口 ASN 走节点分发）
+export const DOUBAN_API_EMBY_NAME = "douban";
 // 一级功能命名空间：TMDB 反代 /tmdb/...
 export const TMDB_BASE_PATH = "/tmdb";
-// 豆瓣 API 简化版后端（与 addon 同机不同容器）
-export const DOUBAN_API_ORIGIN = "http://rn.127315.xyz:4000";
 
 export const RESERVED_NAMES = new Set([
   "admin",

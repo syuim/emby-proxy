@@ -81,7 +81,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 - `/emby/admin`：管理 UI / API
 - `/tmdb/...`：TMDB 反代（一级命名空间，逻辑同原 `/emby/tmdb`）。GET 且路径以 `/t/p/` 开头（TMDB 图片固定结构）时转发到 `image.tmdb.org` 并复用 `/url` 通用代理（UA 伪装 + 目标头规则 + 图片缓存），其余路径转发到 `api.themoviedb.org`
 - `/url`：通用 URL 代理，无鉴权（原 `/img` 已并入，`urlproxy.ts` 单一实现），可代理任意 http(s) 资源。仅 `image/*` 且 2xx 响应走 Cache API 缓存（7 天），API/JSON 每次回源并返回 `no-store`；目标请求头（Referer/Origin 等）按内置规则 + 外部 Referer 规则文件自动补齐（防盗链/鉴权，如 gofans API 需注入 `Origin: https://gofans.cn`）
-- `/doubanapi/...`：豆瓣简化版 API 反代（`http://rn.127315.xyz:4000`），仅 JSON catalog 无 body 改写，无鉴权
+- `/doubanapi/...`：豆瓣简化版 API **别名入口**（无独立后端实现）。内部固定按 emby 记录 `douban`（D1 中 backend=`http://rn.127315.xyz:4000`，绑 US 组）走 `routeNameAccess` 统一名称访问链路——node 模式按入口 ASN 选节点分发、overseas 直连后端、local/direct 全局模式照常；OPTIONS 预检由 Worker 直接应答（浏览器 addon 依赖），客户端 URL 保持不变。仅 JSON catalog 无 body 改写，无鉴权
 - 根路径 `/` 302 到 `/emby/admin`；`/__health` 保留在顶层；其余一级路径 404
 
 节点协议路径不含 `/emby` 前缀：307 到节点仍是 `/<name>/subpath`。只有两种访问形式：名称访问 `/emby/<name>/path`（node 模式下绑组走组节点、未绑组 Worker local），地址访问 `/emby/http(s)://...`（原样或 URL 编码）必走本地代理；不存在 `/emby/<name>/<url>` 形式。

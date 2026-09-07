@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   isPrivateHost,
   normalizePath,
@@ -6,8 +6,9 @@ import {
   rewriteM3u8Urls,
   isTmdbImageSubpath,
   handleDoubanApiRequest,
+  doubanApiSubpath,
 } from "./router";
-import { DOUBAN_API_BASE_PATH, DOUBAN_API_ORIGIN } from "./constants";
+import { DOUBAN_API_BASE_PATH } from "./constants";
 
 const origFetch = globalThis.fetch;
 afterEach(() => {
@@ -160,51 +161,25 @@ describe("rewriteM3u8Urls", () => {
   });
 });
 
-describe("handleDoubanApiRequest", () => {
-  function mockFetch(status: number, body: string, headers: Record<string, string> = {}) {
-    return vi.fn(async () => new Response(body, { status, headers }));
-  }
-
-  it("proxies GET to the douban api origin", async () => {
-    const mf = mockFetch(200, '{"items":[]}', { "Content-Type": "application/json" });
-    globalThis.fetch = mf as any;
-
-    const req = new Request(`https://proxy.laoz.org${DOUBAN_API_BASE_PATH}/catalog/movie/top250.json`);
-    const resp = await handleDoubanApiRequest(req);
-    expect(resp.status).toBe(200);
-
-    const calls = mf.mock.calls.map((c) => String((c as unknown as [string])[0]));
-    expect(calls).toContain(`${DOUBAN_API_ORIGIN}/catalog/movie/top250.json`);
+describe("douban api alias", () => {
+  it("extracts the subpath after /doubanapi (input is a bare pathname)", () => {
+    expect(doubanApiSubpath(`${DOUBAN_API_BASE_PATH}/catalog/movie/top250.json`)).toBe(
+      "/catalog/movie/top250.json",
+    );
+    expect(doubanApiSubpath(`${DOUBAN_API_BASE_PATH}/catalog`)).toBe("/catalog");
   });
 
-  it("forwards only whitelisted headers", async () => {
-    const mf = mockFetch(200, "{}", { "Content-Type": "application/json" });
-    globalThis.fetch = mf as any;
-
-    const req = new Request(`https://proxy.laoz.org${DOUBAN_API_BASE_PATH}/catalog`, {
-      headers: {
-        "User-Agent": "test-ua",
-        "X-Forwarded-For": "1.2.3.4",
-        "Cf-Connecting-Ip": "5.6.7.8",
-      },
-    });
-    await handleDoubanApiRequest(req);
-
-    const calls = mf.mock.calls.map((c) => c as unknown as [string, RequestInit]);
-    const target = calls.find((c) => String(c[0]).includes("/catalog"));
-    expect(target).toBeDefined();
-    const sent = new Headers(target![1].headers);
-    expect(sent.get("user-agent")).toBe("test-ua");
-    expect(sent.get("x-forwarded-for")).toBeNull();
-    expect(sent.get("cf-connecting-ip")).toBeNull();
+  it("maps bare /doubanapi to the record root", () => {
+    expect(doubanApiSubpath(`${DOUBAN_API_BASE_PATH}`)).toBe("/");
+    expect(doubanApiSubpath(`${DOUBAN_API_BASE_PATH}/`)).toBe("/");
   });
 
-  it("adds CORS headers to the response", async () => {
-    const mf = mockFetch(200, "{}", { "Content-Type": "application/json" });
-    globalThis.fetch = mf as any;
-
-    const req = new Request(`https://proxy.laoz.org${DOUBAN_API_BASE_PATH}/catalog`);
-    const resp = await handleDoubanApiRequest(req);
+  it("answers OPTIONS preflight locally with CORS", async () => {
+    const resp = await handleDoubanApiRequest(
+      new Request(`https://proxy.laoz.org${DOUBAN_API_BASE_PATH}/catalog`, { method: "OPTIONS" }),
+      null as any,
+    );
+    expect(resp.status).toBe(204);
     expect(resp.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
 });

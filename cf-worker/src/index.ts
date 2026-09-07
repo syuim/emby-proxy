@@ -44,9 +44,9 @@ export default {
       return handleUrlRequest(request, env, ctx);
     }
 
-    // 一级命名空间 /doubanapi：豆瓣 API 反代（简化版，仅 JSON 无 body 改写）
+    // 一级命名空间 /doubanapi：豆瓣 API 别名入口（内部重写为 /emby/douban，走统一链路）
     if (url.pathname === DOUBAN_API_BASE_PATH || url.pathname.startsWith(DOUBAN_API_BASE_PATH + "/")) {
-      return handleDoubanApiRequest(request);
+      return handleDoubanApiRequest(request, env);
     }
 
     return new Response("Not Found", {

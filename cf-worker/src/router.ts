@@ -1,4 +1,4 @@
-import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_ORIGIN, TMDB_BASE_PATH, URL_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_EMBY_NAME, TMDB_BASE_PATH, URL_BASE_PATH } from "./constants";
 import { handleUrlRequest } from "./urlproxy";
 import { readConfigMeta, readEmbys, readGroups, readNodes } from "./storage";
 import { chooseNodeFromGroup, classifyClientIsp } from "./group";
@@ -10,9 +10,7 @@ export async function handleClientRequest(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.pathname;
-
+  const path = new URL(request.url).pathname;
   const segments = path.split("/").filter(Boolean); // ["emby", <name>, ...subpath]
   const embyName = segments[1];
   if (!embyName) {
@@ -21,7 +19,19 @@ export async function handleClientRequest(
   if (RESERVED_NAMES.has(embyName.toLowerCase())) {
     return notFound("reserved path");
   }
+  return routeNameAccess(request, env, embyName, "/" + segments.slice(2).join("/"));
+}
 
+// 名称访问统一分发：/emby/<name>/<subpath> 与 /doubanapi 别名（固定 emby 记录名）共用。
+// 规则：direct → 307 直连；local → Worker 本地代理；node → 绑组走组路由（overseas
+// 入口先 307 直连，国内按入口 ASN 过滤组内节点后随机 307），未绑组/全灭 → Worker local。
+async function routeNameAccess(
+  request: Request,
+  env: Env,
+  embyName: string,
+  subpath: string,
+): Promise<Response> {
+  const url = new URL(request.url);
   const [embysKV, nodesKV, configMeta] = await Promise.all([
     readEmbys(env),
     readNodes(env),
@@ -33,7 +43,6 @@ export async function handleClientRequest(
     return notFound(`unknown emby '${embyName}'`);
   }
 
-  const subpath = "/" + segments.slice(2).join("/");
   const clientIp = request.headers.get("CF-Connecting-IP") ?? "-";
   const isp = classifyClientIsp(request);
 
@@ -320,23 +329,18 @@ export async function handleTmdbRequest(request: Request, env: Env, ctx?: Execut
   });
 }
 
-// 白名单重建请求头：天然剔除 host / cf-* / x-forwarded-* / x-real-ip
-const DOUBAN_API_FORWARD_HEADERS = [
-  "user-agent",
-  "accept",
-  "accept-language",
-  "content-type",
-  "cookie",
-  "authorization",
-  "referer",
-  "if-none-match",
-  "if-modified-since",
-];
+// ---------- Douban API 别名入口 ----------
+// /doubanapi/... 按 emby 记录名（DOUBAN_API_EMBY_NAME）走 routeNameAccess 统一链路
+// （ASN 分类 → 组路由 → 节点/local/直连），让豆瓣 API 后端也能按运营商经节点分发；
+// 原请求对象原样传递（保留 cf 等属性），客户端访问路径保持不变。
 
-// ---------- Douban API proxy (JSON-only, no body rewriting) ----------
+export function doubanApiSubpath(pathname: string): string {
+  return pathname.slice(DOUBAN_API_BASE_PATH.length) || "/";
+}
 
-export async function handleDoubanApiRequest(request: Request): Promise<Response> {
+export async function handleDoubanApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === "OPTIONS") {
+    // 预检由 Worker 直接应答，避免被 307 到节点/后端（浏览器 addon 依赖）
     return new Response(null, {
       status: 204,
       headers: {
@@ -348,33 +352,12 @@ export async function handleDoubanApiRequest(request: Request): Promise<Response
     });
   }
 
-  const url = new URL(request.url);
-  const subpath = url.pathname.slice(DOUBAN_API_BASE_PATH.length) || "/";
-  const target = DOUBAN_API_ORIGIN + subpath + url.search;
-
-  const headers = new Headers();
-  for (const k of DOUBAN_API_FORWARD_HEADERS) {
-    const v = request.headers.get(k);
-    if (v) headers.set(k, v);
-  }
-
-  const resp = await fetch(target, {
-    method: request.method,
-    headers,
-    redirect: "manual",
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-  });
-
-  const respHeaders = new Headers(resp.headers);
-  respHeaders.set("Access-Control-Allow-Origin", "*");
-  respHeaders.set("Access-Control-Allow-Headers", "*");
-  respHeaders.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-
-  return new Response(resp.body, {
-    status: resp.status,
-    statusText: resp.statusText,
-    headers: respHeaders,
-  });
+  return routeNameAccess(
+    request,
+    env,
+    DOUBAN_API_EMBY_NAME,
+    doubanApiSubpath(new URL(request.url).pathname),
+  );
 }
 
 // ---------- Direct proxy (auto-register) ----------
