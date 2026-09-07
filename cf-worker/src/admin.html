@@ -309,6 +309,8 @@
       tbody tr { transition: background 0.1s; }
       tbody tr:hover { background: var(--color-surface-hover); }
       tbody tr:last-child td { border-bottom: none; }
+      .row-disabled td:not(.actions) { opacity: 0.45; text-decoration: line-through; }
+      .row-disabled td:not(.actions) strong { color: var(--color-text-soft); }
 
       /* ============ Badge ============ */
       .badge {
@@ -1027,7 +1029,7 @@
                         `;
                       }
                       return `
-                        <tr data-id="${escapeHtml(n.id)}" data-mode="view">
+                        <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
                           <td><div class="stack-name">
                             <strong>${escapeHtml(n.name)}</strong>
                           </div></td>
