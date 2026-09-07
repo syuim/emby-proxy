@@ -16,7 +16,7 @@ export interface GroupPick {
   aliveNames: string[];
   poolNames: string[];
   // 命中来源：primary=主池按入口网络匹配；backup=备用池（主池不可用时）；
-  // fallback=两级均无网络匹配时的错配兜底（国内网络不断流；overseas 无此态）
+  // fallback=两级均无网络匹配时的错配兜底（国内网络不断流）
   stage: "primary" | "backup" | "fallback";
 }
 
@@ -33,12 +33,13 @@ function pickRandom(pool: NodeRecord[]): NodeRecord {
 }
 
 /**
- * per-emby 组路由：两级池（主成员 / 备用节点）按优先级选择——
+ * per-emby 组路由，仅国内三大运营商入口（ct/cu/cm）会走到这里；overseas（海外或
+ * 不可判 ASN）入口由 router 先行 307 直连 emby 后端（等同全局 direct 语义），
+ * 本函数只做防御性兜底。两级池（主成员 / 备用节点）按优先级选择——
  * 1. 主池存活且匹配入口网络 → 纯随机（stage=primary）；
  * 2. 主池在当前网络下不可用（全部失效 / 禁用 / 无主成员 / 存活但无 ISP 匹配）→ 备用池同规则选择（stage=backup）；
- * 3. 两级都无网络匹配：overseas 入口不跨网错配返回 null（Worker local），
- *    其余入口从主∪备全部存活中随机错配兜底（stage=fallback，宁可错配不断流）；
- * 4. 全部失效 → null（由调用方走 Worker local 兜底，不写 config_meta，与全局 failover 互不干扰）。
+ * 3. 两级都无网络匹配 → 从主∪备全部存活中随机错配兜底（stage=fallback，宁可错配不断流）；
+ * 4. 全部失效 / 组不存在 / 组内成员不在节点列表 → null（由调用方走 Worker local 兜底，不写 config_meta）。
  */
 export async function chooseNodeFromGroup(
   env: Env,
@@ -46,6 +47,8 @@ export async function chooseNodeFromGroup(
   nodes: NodeRecord[],
   isp: IspClass,
 ): Promise<GroupPick | null> {
+  // overseas 入口不经节点：不探测不选池，由 router 直接 307 到 emby 后端
+  if (isp === "overseas") return null;
   const { primary, backup } = await readGroupNodeIds(env, groupId);
 
   const candidates = nodes.filter(
@@ -81,8 +84,7 @@ export async function chooseNodeFromGroup(
     };
   }
 
-  // 主∪备有存活但都匹配不上入口网络：overseas 宁可 local 也不跨网错配
-  if (isp === "overseas") return null;
+  // 主∪备有存活但都匹配不上入口网络（仅 ct/cu/cm 会走到这里）：宁可错配也不断流
   return {
     node: pickRandom(alive),
     aliveNames: alive.map((n) => n.name),

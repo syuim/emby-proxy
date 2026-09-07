@@ -2,15 +2,17 @@
 // 数据源：CAIDA as-org2info 2026-08 快照（publicdata.caida.org/datasets/as-organizations/），
 // 按注册名归类 + Team Cymru whois 对全部可疑同名逐条核验（UNICOM/NETCOM/CMCC 海外撞名已剔除）。
 // 国内阿里云(ALIBABA-CN-NET)/腾讯云(TENCENT) 写死归 ct（产品决策：国内 IDC 走电信）。
-// 未命中（海外、教育网、广电、二级运营商等）→ overseas → 组内按 overseas 标签过滤。
+// 未命中（海外、教育网、广电、二级运营商、无 ASN 等）→ overseas。
+// overseas 入口在 router 层直接 307 到 emby 后端（等同全局 direct 语义），不经节点，
+// 因此节点可标注标签（IspTag）只含国内三大运营商，没有 overseas。
 
-export type IspTag = "ct" | "cu" | "cm" | "overseas";
-export type IspClass = IspTag;
+export type IspTag = "ct" | "cu" | "cm";
+export type IspClass = IspTag | "overseas";
 
-export const ISP_TAGS: readonly IspTag[] = ["ct", "cu", "cm", "overseas"];
+export const ISP_TAGS: readonly IspTag[] = ["ct", "cu", "cm"];
 
 export function isIspTag(v: unknown): v is IspTag {
-  return v === "ct" || v === "cu" || v === "cm" || v === "overseas";
+  return v === "ct" || v === "cu" || v === "cm";
 }
 
 // 电信：CHINANET/CHINATELECOM 系（含园区/GE/MTS 挂名网络、电信印尼）+ 国内阿里云/腾讯云

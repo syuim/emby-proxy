@@ -68,12 +68,8 @@ describe("matchIspPool", () => {
     expect(matchIspPool(alive, "ct").map((n) => n.id)).toEqual(["n-ct", "n-any", "n-all"]);
   });
 
-  it("isp=overseas 只保留 overseas 标签与未标注 node", () => {
-    const nOs = makeNode("n-os", ["overseas"]);
-    expect(matchIspPool([...alive, nOs], "overseas").map((n) => n.id)).toEqual([
-      "n-any",
-      "n-os",
-    ]);
+  it("isp=overseas 只保留未标注 node（节点已无 overseas 标签）", () => {
+    expect(matchIspPool(alive, "overseas").map((n) => n.id)).toEqual(["n-any"]);
   });
 
   it("无匹配 → 空数组（不回退；回退由路由上层决策）", () => {
@@ -147,21 +143,11 @@ describe("chooseNodeFromGroup", () => {
     expect(await chooseNodeFromGroup(env, 1, nodes, "ct")).toBeNull();
   });
 
-  it("overseas 入口：组内无 overseas 标签节点 → null", async () => {
-    const env = stubEnv(1, ["n-ct", "n-cu"]);
-    mockNodeHealth(new Set(["n-ct", "n-cu"]));
-    const nodes = [makeNode("n-ct", ["ct"]), makeNode("n-cu", ["cu"])];
-    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
-    expect(pick).toBeNull();
-  });
-
-  it("overseas 入口：组内有 overseas 标签节点 → 从中选", async () => {
-    const env = stubEnv(1, ["n-overseas", "n-cu"]);
-    mockNodeHealth(new Set(["n-overseas", "n-cu"]));
-    const nodes = [makeNode("n-overseas", ["overseas"]), makeNode("n-cu", ["cu"])];
-    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
-    expect(pick).not.toBeNull();
-    expect(pick!.node.id).toBe("n-overseas");
+  it("overseas 入口 → null：即使未标注 node 存活也不选（router 先行 307 直连后端）", async () => {
+    const env = stubEnv(1, ["n-any"]);
+    mockNodeHealth(new Set(["n-any"]));
+    const nodes = [makeNode("n-any", [])];
+    expect(await chooseNodeFromGroup(env, 1, nodes, "overseas")).toBeNull();
   });
 
   // ---------- 备用节点 ----------
@@ -209,31 +195,11 @@ describe("chooseNodeFromGroup", () => {
     expect(pick!.stage).toBe("backup");
   });
 
-  it("overseas 入口：主存活但无匹配 + 备用含 overseas → 选备用（stage=backup）", async () => {
+  it("overseas 入口 → null：主备均存活也不启用备用池", async () => {
     const env = stubEnv(1, ["n-main"], ["n-back"]);
     mockNodeHealth(new Set(["n-main", "n-back"]));
-    const nodes = [
-      makeNode("n-main", ["ct"]),
-      makeNode("n-back", ["overseas"]),
-    ];
-    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
-    expect(pick).not.toBeNull();
-    expect(pick!.node.id).toBe("n-back");
-    expect(pick!.stage).toBe("backup");
-  });
-
-  it("overseas 入口：主全灭 + 备用含 overseas 标签 → 选备用", async () => {
-    const env = stubEnv(1, ["n-main"], ["n-os", "n-cu"]);
-    mockNodeHealth(new Set(["n-os", "n-cu"]));
-    const nodes = [
-      makeNode("n-main", ["ct"]),
-      makeNode("n-os", ["overseas"]),
-      makeNode("n-cu", ["cu"]),
-    ];
-    const pick = await chooseNodeFromGroup(env, 1, nodes, "overseas");
-    expect(pick).not.toBeNull();
-    expect(pick!.node.id).toBe("n-os");
-    expect(pick!.stage).toBe("backup");
+    const nodes = [makeNode("n-main", ["ct"]), makeNode("n-back", [])];
+    expect(await chooseNodeFromGroup(env, 1, nodes, "overseas")).toBeNull();
   });
 
   it("主成员全部禁用 + 备用存活 → 选备用", async () => {
@@ -268,12 +234,5 @@ describe("chooseNodeFromGroup", () => {
       expect(["n-cu", "n-cm"]).toContain(pick!.node.id);
       expect(pick!.stage).toBe("fallback");
     }
-  });
-
-  it("主备用均存活但无匹配（overseas 入口）→ null（不跨网错配）", async () => {
-    const env = stubEnv(1, ["n-cu"], ["n-cm"]);
-    mockNodeHealth(new Set(["n-cu", "n-cm"]));
-    const nodes = [makeNode("n-cu", ["cu"]), makeNode("n-cm", ["cm"])];
-    expect(await chooseNodeFromGroup(env, 1, nodes, "overseas")).toBeNull();
   });
 });

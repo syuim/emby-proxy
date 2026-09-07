@@ -53,6 +53,14 @@ export async function handleClientRequest(
 
   // case 'node': emby 绑定代理组 → 组内按入口网络过滤后纯随机；未绑组走下方 Worker local
   if (emby.group_id != null) {
+    // 海外/未知 ASN（未命中国内运营商）→ 307 直连 emby 后端，不经节点（等同全局 direct 语义）
+    if (isp === "overseas") {
+      console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=direct reason=isp-overseas`);
+      return new Response(null, {
+        status: 307,
+        headers: { Location: target, "Cache-Control": "no-store" },
+      });
+    }
     const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
     if (pick) {
       const groups = await readGroups(env);

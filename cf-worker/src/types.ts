@@ -3,7 +3,8 @@ export interface NodeRecord {
   name: string;
   public_url: string;
   created_at: string;
-  // 适合的网络标签（'ct' 电信 / 'cu' 联通 / 'cm' 移动 / 'overseas' 海外），空数组 = 任何网络可选
+  // 适合的网络标签（'ct' 电信 / 'cu' 联通 / 'cm' 移动），空数组 = 任何网络可选；
+  // 海外/未知 ASN 入口不经节点，直接 307 到后端（见 router.ts），故无 overseas 标签
   isp_tags: string[];
   // 手动禁用：视为不可达，不参与组路由 / 探活 / 配置推送
   disabled: boolean;
