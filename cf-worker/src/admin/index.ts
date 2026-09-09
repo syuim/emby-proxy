@@ -38,6 +38,49 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
     });
   }
 
+  // PWA assets（不要鉴权）
+  if (path === "/admin/manifest.json") {
+    const manifest = {
+      name: "Emby Router",
+      short_name: "Emby Router",
+      description: "Emby 反代统一入口控制面",
+      start_url: "/emby/admin",
+      display: "standalone",
+      background_color: "#09090b",
+      theme_color: "#09090b",
+      icons: [
+        { src: "/emby/admin/icon.svg", sizes: "192x192", type: "image/svg+xml" },
+        { src: "/emby/admin/icon.svg", sizes: "512x512", type: "image/svg+xml" },
+        { src: "/emby/admin/icon.svg", sizes: "192x192", type: "image/svg+xml", purpose: "maskable" },
+      ],
+    };
+    return new Response(JSON.stringify(manifest, null, 2), {
+      headers: { "Content-Type": "application/manifest+json; charset=utf-8" },
+    });
+  }
+  if (path === "/admin/sw.js") {
+    const swCode = [
+      'const C="emby-router-v1",P=["/emby/admin","/emby/admin/manifest.json","/emby/admin/icon.svg"];',
+      'self.addEventListener("install",e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(P)).then(()=>self.skipWaiting()));});',
+      'self.addEventListener("activate",e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});',
+      'self.addEventListener("fetch",e=>{e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));});',
+    ].join("");
+    return new Response(swCode, {
+      headers: { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+  if (path === "/admin/icon.svg") {
+    const svg = [
+      '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">',
+      '<rect width="512" height="512" rx="64" fill="#09090b"/>',
+      '<text x="256" y="340" text-anchor="middle" font-size="320">🎬</text>',
+      "</svg>",
+    ].join("");
+    return new Response(svg, {
+      headers: { "Content-Type": "image/svg+xml; charset=utf-8" },
+    });
+  }
+
   // Login / logout（不要鉴权）
   if (path === "/admin/api/login" && method === "POST") {
     return handleLogin(request, env);

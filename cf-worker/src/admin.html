@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Emby Router · 控制面</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>" />
+    <link rel="manifest" href="/emby/admin/manifest.json" />
+    <meta name="theme-color" content="#09090b" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="apple-touch-icon" href="/emby/admin/icon.svg" />
     <style>
       /* ============ COSS UI 风设计令牌 ============ */
       :root {
@@ -79,6 +84,7 @@
 
       /* ============ 基础 ============ */
       * { box-sizing: border-box; }
+      html { -webkit-tap-highlight-color: transparent; }
       html, body { height: 100%; margin: 0; }
       body {
         font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -517,8 +523,9 @@
           right: 0;
           background: var(--color-surface);
           box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.18);
+          z-index: 2;
         }
-        thead th:last-child { background: var(--color-surface-2); }
+        thead th:last-child { background: var(--color-surface-2); z-index: 3; }
 
         .badge { font-size: 10px; padding: 2px 7px; }
       }
@@ -541,11 +548,11 @@
         thead th { font-size: 9px; }
         .badge::before { display: none; }
         .badge { padding: 2px 6px; }
-        td.actions { gap: 4px; }
+        td.actions { gap: 6px; }
 
-        .btn { font-size: 11px; padding: 6px 8px; }
-        .btn-primary { padding: 7px 10px; font-size: 11px; }
-        .btn-ghost, .btn-danger { font-size: 10px; padding: 4px 7px; }
+        .btn { font-size: 11px; padding: 6px 8px; min-height: 36px; }
+        .btn-primary { padding: 7px 10px; font-size: 11px; min-height: 36px; }
+        .btn-ghost, .btn-danger { font-size: 10px; padding: 4px 7px; min-height: 36px; }
 
         .mono { font-size: 9px; }
 
@@ -559,7 +566,7 @@
         .login-card .brand { font-size: 18px; }
         .login-card .subtitle { font-size: 12px; }
 
-        input, select { font-size: 11px; padding: 6px 8px; }
+        input, select { font-size: 11px; padding: 6px 8px; min-height: 36px; }
 
         .stack-name strong { font-size: 11px; }
         .stack-name .mono { display: none; }
@@ -575,14 +582,24 @@
         .table-wrap-nodes th:nth-child(5),
         .table-wrap-nodes td:nth-child(5) { display: none; }
 
+        .row-disabled td:not(.actions) { text-decoration: none; }
+
+        .mode-selector { width: 100%; }
+        .mode-selector select { width: 100%; }
+
         .toast {
-          left: 12px;
-          right: 12px;
-          bottom: 12px;
+          left: calc(12px + env(safe-area-inset-left));
+          right: calc(12px + env(safe-area-inset-right));
+          bottom: calc(12px + env(safe-area-inset-bottom));
           max-width: none;
           font-size: 12px;
           padding: 10px 14px;
         }
+      }
+
+      @media (max-height: 500px) {
+        .modal { margin-top: 8px; }
+        .login-card { padding: 16px 14px; }
       }
     </style>
   </head>
@@ -590,6 +607,8 @@
     <div id="app"></div>
     <div id="modal-root"></div>
     <script>
+      // douban 是 /doubanapi 别名入口的系统保留 emby：禁止编辑/删除，列表固定排最底
+      const DOUBAN_EMBY_NAME = "douban";
       const $app = document.getElementById("app");
       const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
 
@@ -664,7 +683,12 @@
           if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
           return a.name.localeCompare(b.name);
         });
-        state.embys = e.embys || [];
+        state.embys = (e.embys || []).sort((a, b) => {
+          // 系统保留 douban 固定排最底，其余按名称排序
+          if (a.name === DOUBAN_EMBY_NAME && b.name !== DOUBAN_EMBY_NAME) return 1;
+          if (b.name === DOUBAN_EMBY_NAME && a.name !== DOUBAN_EMBY_NAME) return -1;
+          return a.name.localeCompare(b.name);
+        });
         state.groups = g.groups || [];
         state.health = h.nodes || {};
         state.proxyMode = c.proxy_mode || "node";
@@ -905,15 +929,18 @@
                       }
                       const gid = e.group_id;
                       const gname = groupName(gid);
+                      // douban 系统保留：不提供编辑/删除入口，行尾显示锁定标识
+                      const locked = e.name === DOUBAN_EMBY_NAME;
+                      const actionsCell = locked
+                        ? `<span class="badge unknown" title="/doubanapi 别名入口依赖此记录，禁止修改或删除">🔒 系统保留</span>`
+                        : `<button class="btn btn-ghost" data-act="edit">编辑</button>
+                           <button class="btn btn-danger" data-act="del">删除</button>`;
                       return `
                         <tr data-name="${escapeHtml(e.name)}" data-mode="view">
                           <td><strong>${escapeHtml(e.name)}</strong></td>
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
                           <td>${gname ? `<span class="badge" style="border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-text);">${escapeHtml(gname)}</span>` : '<span class="badge unknown">未绑定</span>'}</td>
-                          <td class="actions">
-                            <button class="btn btn-ghost" data-act="edit">编辑</button>
-                            <button class="btn btn-danger" data-act="del">删除</button>
-                          </td>
+                          <td class="actions">${actionsCell}</td>
                         </tr>
                       `;
                     }).join("")}
@@ -939,18 +966,25 @@
           const mode = tr.dataset.mode;
 
           if (mode === "view") {
-            tr.querySelector('[data-act="edit"]').onclick = () => {
-              state.editingEmby = name;
-              render();
-            };
-            tr.querySelector('[data-act="del"]').onclick = async () => {
-              if (!confirm(`确认删除 emby '${name}'？`)) return;
-              try {
-                await api("/emby/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
-                toast("已删除", "ok");
-                await refreshAll();
-              } catch (e) { toast(e.message, "err"); }
-            };
+            // 锁定行（douban 系统保留）无操作按钮，需判空后绑定
+            const editBtn = tr.querySelector('[data-act="edit"]');
+            if (editBtn) {
+              editBtn.onclick = () => {
+                state.editingEmby = name;
+                render();
+              };
+            }
+            const delBtn = tr.querySelector('[data-act="del"]');
+            if (delBtn) {
+              delBtn.onclick = async () => {
+                if (!confirm(`确认删除 emby '${name}'？`)) return;
+                try {
+                  await api("/emby/admin/api/embys/" + encodeURIComponent(name), { method: "DELETE" });
+                  toast("已删除", "ok");
+                  await refreshAll();
+                } catch (e) { toast(e.message, "err"); }
+              };
+            }
           } else {
             const $backend = tr.querySelector(".row-backend");
             tr.querySelector('[data-act="save"]').onclick = async () => {
@@ -1401,6 +1435,11 @@
         if (state.authed) await refreshAll();
         else render();
       })().catch((e) => toast(e.message, "err"));
+    </script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/emby/admin/sw.js");
+      }
     </script>
   </body>
 </html>
