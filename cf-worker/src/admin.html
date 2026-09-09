@@ -277,6 +277,20 @@
       }
       /* iOS 16+ 的 select 弹层会继承 option 字号，移动端 11px 会缩成不可读的小字 */
       option { font-size: 16px; }
+      /* checkbox/radio 是替换元素：不继承文本输入框的 width/padding/min-height，
+         否则 iOS Safari 上原生控件被撑变形，胶囊 chip 内文字错位 */
+      input[type="checkbox"], input[type="radio"] {
+        width: auto;
+        height: auto;
+        min-height: 0;
+        padding: 0;
+        margin: 0;
+        border: none;
+        background: none;
+        box-shadow: none;
+        flex-shrink: 0;
+        accent-color: var(--color-accent);
+      }
       input:focus, select:focus, textarea:focus {
         outline: none;
         border-color: var(--color-text);
@@ -409,15 +423,8 @@
       .tabs-row .tabs { margin-bottom: 0; }
       .mode-selector { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; }
       .mode-label { font-size: 12px; color: var(--color-text-dim); white-space: nowrap; }
-      .mode-selector select {
-        padding: 6px 10px;
-        border-radius: var(--radius-sm);
-        border: 1px solid var(--color-border-strong);
-        background: var(--color-surface);
-        color: var(--color-text);
-        font-size: 13px;
-        white-space: nowrap;
-      }
+      .mode-selector .tabs { box-shadow: none; border-color: var(--color-border-strong); }
+      .mode-selector .tabs button { padding: 5px 12px; font-size: 12px; white-space: nowrap; }
 
       /* ============ Modal ============ */
       .modal-overlay {
@@ -584,9 +591,6 @@
 
         .row-disabled td:not(.actions) { text-decoration: none; }
 
-        .mode-selector { width: 100%; }
-        .mode-selector select { width: 100%; }
-
         .toast {
           left: calc(12px + env(safe-area-inset-left));
           right: calc(12px + env(safe-area-inset-right));
@@ -609,6 +613,7 @@
     <script>
       // douban 是 /doubanapi 别名入口的系统保留 emby：禁止编辑/删除，列表固定排最底
       const DOUBAN_EMBY_NAME = "douban";
+      const MODE_LABELS = { node: "Node（组路由）", local: "Worker 代理", direct: "直连" };
       const $app = document.getElementById("app");
       const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
 
@@ -810,17 +815,17 @@
           </header>
           <main>
             <div class="tabs-row">
-              <div class="tabs">
+              <div class="tabs" id="nav-tabs">
                 <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
                 <button data-tab="groups" class="${state.tab === "groups" ? "active" : ""}">代理组 + 节点</button>
               </div>
-              <div class="mode-selector" title="全局模式；Node 档下，绑定代理组的 emby 走组内网络匹配 + 随机，未绑组的走 Worker 本地代理"> 
+              <div class="mode-selector">
                 <label class="mode-label">模式</label>
-                <select id="proxy-mode-select">
-                  <option value="node" ${state.proxyMode === "node" ? "selected" : ""}>Node（组路由）</option>
-                  <option value="local" ${state.proxyMode === "local" ? "selected" : ""}>Worker 代理</option>
-                  <option value="direct" ${state.proxyMode === "direct" ? "selected" : ""}>直连</option>
-                </select>
+                <div class="tabs">
+                  <button data-mode="node" class="${state.proxyMode === "node" ? "active" : ""}" title="Node：绑定代理组的 emby 按入口网络匹配组内节点随机负载，未绑组走 Worker 本地代理">Node</button>
+                  <button data-mode="local" class="${state.proxyMode === "local" ? "active" : ""}" title="Worker：所有 emby 由 Worker 本地代理转发，隐藏源站">Worker</button>
+                  <button data-mode="direct" class="${state.proxyMode === "direct" ? "active" : ""}" title="直连：客户端 307 直连 emby 后端，不经 Worker 与节点">直连</button>
+                </div>
               </div>
             </div>
             <div id="tab-content"></div>
@@ -833,26 +838,26 @@
           state.authed = false;
           render();
         };
-        $app.querySelectorAll(".tabs button").forEach((b) => {
+        $app.querySelectorAll("#nav-tabs button").forEach((b) => {
           b.onclick = () => { state.tab = b.dataset.tab; localStorage.setItem("emby-router-tab", state.tab); render(); };
         });
-        const modeSelect = $app.querySelector("#proxy-mode-select");
-        if (modeSelect) {
-          modeSelect.onchange = async () => {
-            const newMode = modeSelect.value;
+        $app.querySelectorAll(".mode-selector .tabs button").forEach((b) => {
+          b.onclick = async () => {
+            const newMode = b.dataset.mode;
+            if (newMode === state.proxyMode) return;
             try {
               await api("/emby/admin/api/config", {
                 method: "PUT",
                 body: JSON.stringify({ proxy_mode: newMode }),
               });
               state.proxyMode = newMode;
-              toast(`已切换为 ${modeSelect.options[modeSelect.selectedIndex].text}`, "ok");
+              toast(`已切换为 ${MODE_LABELS[newMode]}`, "ok");
             } catch (e) {
               toast(e.message, "err");
-              modeSelect.value = state.proxyMode;
             }
+            render();
           };
-        }
+        });
         if (state.tab === "embys") renderEmbys();
         else renderGroups();
       }
