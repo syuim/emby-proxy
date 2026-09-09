@@ -150,7 +150,6 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	currentURL := targetURL
 	currentMethod := r.Method
 	redirectsLeft := maxRedirects
-	followCount := 0
 
 	for {
 		var bodyReader io.Reader
@@ -166,9 +165,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Copy filtered headers
 		for k, vv := range reqHeaders {
-			for _, v := range vv {
-				req.Header.Set(k, v)
-			}
+			req.Header[k] = vv
 		}
 		// Set Host to backend host
 		if u, err := url.Parse(currentURL); err == nil {
@@ -206,7 +203,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			elapsed := time.Since(started).Milliseconds()
 			log.Printf("done: %s %s → %d in %dms (%d follow) | transferred=%d",
-				r.Method, r.URL.Path, resp.StatusCode, elapsed, followCount, n)
+				r.Method, r.URL.Path, resp.StatusCode, elapsed, maxRedirects-redirectsLeft, n)
 			return
 		}
 
@@ -267,8 +264,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			bodyBytes = nil
 		}
 
-		followCount++
-		log.Printf("follow #%d: %d %s → %s", followCount, resp.StatusCode, shortenURL(currentURL), shortenURL(nextURLStr))
+		log.Printf("follow #%d: %d %s → %s", maxRedirects-redirectsLeft, resp.StatusCode, shortenURL(currentURL), shortenURL(nextURLStr))
 		currentURL = nextURLStr
 		redirectsLeft--
 	}

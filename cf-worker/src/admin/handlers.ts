@@ -1,4 +1,4 @@
-import { EMBY_NAME_RE, RESERVED_NAMES } from "../constants";
+import { EMBY_NAME_RE, RESERVED_NAMES, normalizeUrl } from "../constants";
 import { isIspTag } from "../isp";
 import {
   readConfigMeta,
@@ -70,7 +70,7 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionCo
   if (ispTags === null) {
     return json(400, { error: "isp_tags 只能包含 ct / cu / cm" });
   }
-  const trimmed = { name: name.trim(), public_url: public_url.trim().replace(/\/$/, "") };
+  const trimmed = { name: name.trim(), public_url: normalizeUrl(public_url) };
   const validation = validateNode(trimmed);
   if (validation) return json(400, { error: validation });
 
@@ -138,7 +138,7 @@ export async function handleUpdateNode(
     }
   }
   if (typeof public_url === "string" && public_url.trim()) {
-    const v = public_url.trim().replace(/\/$/, "");
+    const v = normalizeUrl(public_url);
     const err = validatePublicUrl(v);
     if (err) return json(400, { error: err });
     if (nodes.nodes.some((n) => n.id !== id && n.public_url === v)) {
@@ -202,7 +202,7 @@ export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Respons
   const trimmed: Omit<EmbyRecord, "created_at" | "group_id"> = {
     name: typeof name === "string" ? name.trim() : "",
     backend_url:
-      typeof backend_url === "string" ? backend_url.trim().replace(/\/$/, "") : "",
+      typeof backend_url === "string" ? normalizeUrl(backend_url) : "",
   };
   const err = validateEmby(trimmed);
   if (err) return json(400, { error: err });
@@ -256,7 +256,7 @@ export async function handleUpdateEmby(
     changed = true;
   }
   if (typeof backend_url === "string" && backend_url.trim()) {
-    const v = backend_url.trim().replace(/\/$/, "");
+    const v = normalizeUrl(backend_url);
     if (v !== emby.backend_url) {
       emby.backend_url = v;
       changed = true;

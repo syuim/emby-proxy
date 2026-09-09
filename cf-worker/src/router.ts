@@ -1,6 +1,6 @@
-import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_EMBY_NAME, TMDB_BASE_PATH, URL_BASE_PATH } from "./constants";
+import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_EMBY_NAME, TMDB_BASE_PATH, URL_BASE_PATH, STATIC_ASSET_CACHE_TTL, normalizeUrl } from "./constants";
 import { handleUrlRequest } from "./urlproxy";
-import { readConfigMeta, readEmbys, readGroups, readNodes } from "./storage";
+import { readConfigMeta, readEmbys, readNodes } from "./storage";
 import { chooseNodeFromGroup, classifyClientIsp } from "./group";
 import type { Env } from "./types";
 
@@ -72,10 +72,8 @@ async function routeNameAccess(
     }
     const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
     if (pick) {
-      const groups = await readGroups(env);
-      const groupName = groups.find((g) => g.id === emby.group_id)?.name ?? String(emby.group_id);
       console.log(
-        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=group group=${groupName} stage=${pick.stage} alive=${pick.aliveNames.join(",")} pool=${pick.poolNames.join(",")} node=${pick.node.name}`,
+        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=group group=${emby.group_id} stage=${pick.stage} alive=${pick.aliveNames.join(",")} pool=${pick.poolNames.join(",")} node=${pick.node.name}`,
       );
       // 节点协议路径不含 /emby 前缀：/<name>/subpath
       const nodeTarget = buildTargetUrl(pick.node.public_url, "/" + emby.name + subpath, url.search);
@@ -174,7 +172,7 @@ async function proxyLocal(
     body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
   };
   if (isStatic) {
-    init.cf = { cacheEverything: true, cacheTtl: 86400 };
+    init.cf = { cacheEverything: true, cacheTtl: STATIC_ASSET_CACHE_TTL };
   } else if (isFrontend) {
     init.cf = { cacheEverything: true, cacheTtl: FRONTEND_ASSET_MAX_AGE };
   }
@@ -269,16 +267,14 @@ async function proxyLocal(
   }
 
   if (isStatic) {
-    respHeaders.set("Cache-Control", "public, max-age=86400");
-    respHeaders.delete("Expires");
-    respHeaders.delete("Pragma");
+    respHeaders.set("Cache-Control", `public, max-age=${STATIC_ASSET_CACHE_TTL}`);
   } else if (isFrontend) {
     respHeaders.set("Cache-Control", `public, max-age=${FRONTEND_ASSET_MAX_AGE}`);
-    respHeaders.delete("Expires");
-    respHeaders.delete("Pragma");
   } else {
     respHeaders.set("Cache-Control", "no-store");
   }
+  respHeaders.delete("Expires");
+  respHeaders.delete("Pragma");
 
   return new Response(resp.body, {
     status: resp.status,
@@ -510,7 +506,7 @@ export function rewriteM3u8Urls(text: string, rewrite: (raw: string) => string):
 // 请求级存活探测已移至 alive.ts（probeAlive + 非对称 TTL 缓存），组路由共用。
 
 export function buildTargetUrl(publicUrl: string, path: string, search: string): string {
-  const base = publicUrl.replace(/\/$/, "");
+  const base = normalizeUrl(publicUrl);
   const normalized = normalizePath(path);
   return `${base}${normalized}${search}`;
 }

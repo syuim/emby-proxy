@@ -39,5 +39,13 @@ export const RESERVED_NAMES = new Set([
 export const ADMIN_COOKIE = "admin_token";
 export const ADMIN_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
 
+// 静态资源（图片/字幕等）CF 边缘缓存时长
+export const STATIC_ASSET_CACHE_TTL = 86400;
+
 // /url 通用代理图片缓存时长
 export const IMAGE_CACHE_MAX_AGE = 7 * 24 * 60 * 60;
+
+// 统一 URL 规范化：去除首尾空白与尾部斜杠
+export function normalizeUrl(raw: string): string {
+  return raw.trim().replace(/\/$/, "");
+}
