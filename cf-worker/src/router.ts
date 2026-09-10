@@ -24,7 +24,7 @@ export async function handleClientRequest(
 
 // 名称访问统一分发：/emby/<name>/<subpath> 与 /doubanapi 别名（固定 emby 记录名）共用。
 // 规则：direct → 307 直连；local → Worker 本地代理；node → 绑组走组路由（overseas
-// 入口先 307 直连，国内按入口 ASN 过滤组内节点后随机 307），未绑组/全灭 → Worker local。
+// 入口先 307 直连，国内按入口 ASN 过滤组内节点后轮询 307），未绑组/全灭 → Worker local。
 async function routeNameAccess(
   request: Request,
   env: Env,
@@ -60,7 +60,7 @@ async function routeNameAccess(
       return proxyLocal(request, target, emby.name, emby.backend_url);
   }
 
-  // case 'node': emby 绑定代理组 → 组内按入口网络过滤后纯随机；未绑组走下方 Worker local
+  // case 'node': emby 绑定代理组 → 组内按入口网络过滤后轮询；未绑组走下方 Worker local
   if (emby.group_id != null) {
     // 海外/未知 ASN（未命中国内运营商）→ 307 直连 emby 后端，不经节点（等同全局 direct 语义）
     if (isp === "overseas") {
