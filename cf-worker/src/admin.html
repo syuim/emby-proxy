@@ -1300,7 +1300,7 @@
         const chipRow = (cls, checkedSet) => state.nodes.length === 0
           ? '<p class="hint" style="margin:0;">暂无节点，请先在下方节点列表添加</p>'
           : `<div style="display:flex;gap:8px 6px;flex-wrap:wrap;align-items:center;">${state.nodes.map((n) => `
-              <label class="node-chip" title="${escapeHtml(n.name)}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
+              <label class="node-chip" title="${escapeHtml(n.name)}${n.disabled ? "（已禁用，不可勾选）" : ""}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;padding:4px 12px;border:1px solid var(--color-border-strong, rgba(128,128,128,.25));border-radius:999px;background:var(--color-surface);white-space:nowrap;font-size:12px;line-height:1.4;color:var(--color-text);">
                 <input type="checkbox" class="${cls}" data-nid="${escapeHtml(n.id)}" ${checkedSet.has(n.id) ? "checked" : ""} />
                 ${escapeHtml(n.name)}${n.disabled ? ' <span class="hint">(已禁用)</span>' : ""}
               </label>`).join("")}</div>`;
@@ -1317,7 +1317,7 @@
                   <input id="gm-name" value="${isEdit ? escapeHtml(group.name) : ""}" placeholder="例如 main" />
                 </div>
                 <div class="field">
-                  <label>成员节点 <span class="hint">可多选；勾选后该组正常负载只在这些 node 上</span></label>
+                  <label>成员节点 <span class="hint">可多选；已禁用节点不可勾选；勾选后该组正常负载只在这些 node 上</span></label>
                   ${chipRow("gm-member", memberSet)}
                 </div>
                 <div class="field">
@@ -1337,12 +1337,14 @@
         if (window.innerWidth > 768) root.querySelector("#gm-name").focus();
         const memberCbs = Array.from(root.querySelectorAll(".gm-member"));
         const backupCbs = Array.from(root.querySelectorAll(".gm-backup"));
-        // 两区互斥：已勾入一区的节点，另一区同名选项置灰禁用，取消勾选后恢复可选
+        const disabledNids = new Set(state.nodes.filter((n) => n.disabled).map((n) => n.id));
+        // 两区互斥：已勾入一区的节点，另一区同名选项置灰禁用，取消勾选后恢复可选。
+        // 禁用节点不可勾选：已在组内的可取消勾选（移除），取消后不可再勾
         const syncTwinState = () => {
           const memberNids = new Set(memberCbs.filter((c) => c.checked).map((c) => c.dataset.nid));
           const backupNids = new Set(backupCbs.filter((c) => c.checked).map((c) => c.dataset.nid));
-          memberCbs.forEach((cb) => { cb.disabled = backupNids.has(cb.dataset.nid); });
-          backupCbs.forEach((cb) => { cb.disabled = memberNids.has(cb.dataset.nid); });
+          memberCbs.forEach((cb) => { cb.disabled = backupNids.has(cb.dataset.nid) || (disabledNids.has(cb.dataset.nid) && !cb.checked); });
+          backupCbs.forEach((cb) => { cb.disabled = memberNids.has(cb.dataset.nid) || (disabledNids.has(cb.dataset.nid) && !cb.checked); });
         };
         memberCbs.forEach((cb) => cb.addEventListener("change", syncTwinState));
         backupCbs.forEach((cb) => cb.addEventListener("change", syncTwinState));
