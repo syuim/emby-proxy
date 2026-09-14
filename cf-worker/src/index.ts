@@ -34,9 +34,9 @@ export default {
       }
       // 地址访问 /emby/http(s)://...（原样或 URL 编码）→ 必走本地代理
       if (/^https?(:\/\/|%3A)/i.test(rest)) {
-        return handleDirectRequest(request, env);
+        return handleDirectRequest(request, env, ctx);
       }
-      return handleClientRequest(request, env);
+      return handleClientRequest(request, env, ctx);
     }
 
     // 一级命名空间 /url：通用 URL 代理（任意 http(s) 资源，图片/API 均可）
@@ -46,7 +46,7 @@ export default {
 
     // 一级命名空间 /doubanapi：豆瓣 API 别名入口（内部重写为 /emby/douban，走统一链路）
     if (url.pathname === DOUBAN_API_BASE_PATH || url.pathname.startsWith(DOUBAN_API_BASE_PATH + "/")) {
-      return handleDoubanApiRequest(request, env);
+      return handleDoubanApiRequest(request, env, ctx);
     }
 
     return new Response("Not Found", {

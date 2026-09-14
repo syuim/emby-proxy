@@ -1,5 +1,6 @@
 import { EMBY_NAME_RE, RESERVED_NAMES, normalizeUrl } from "../constants";
 import { isIspTag } from "../isp";
+import { sendTelegramMessage } from "../notify";
 import {
   readConfigMeta,
   readEmbys,
@@ -7,6 +8,7 @@ import {
   readGroupsWithMembers,
   readHealth,
   readNodes,
+  readTgConfig,
   writeHealth,
 } from "../storage";
 import { buildSnapshot, pushSnapshotToAll } from "../sync";
@@ -47,18 +49,81 @@ export async function handleListNodes(env: Env): Promise<Response> {
 }
 
 export async function handleGetConfig(env: Env): Promise<Response> {
-  const config = await readConfigMeta(env);
-  return json(200, { proxy_mode: config.proxy_mode });
+  const [config, tg] = await Promise.all([readConfigMeta(env), readTgConfig(env)]);
+  return json(200, {
+    proxy_mode: config.proxy_mode,
+    tg_bot_token: tg.botToken,
+    tg_chat_id: tg.chatId,
+  });
 }
 
+// 部分更新：proxy_mode 与 tg 字段任一存在即更新；tg 两字段需成对提交（同空 = 关闭通知）
 export async function handleUpdateConfig(req: JsonRequest, env: Env): Promise<Response> {
-  const { proxy_mode } = req.body ?? {};
-  if (!["node", "local", "direct"].includes(proxy_mode)) {
-    return json(400, { error: "proxy_mode 必须为 node / local / direct" });
+  const { proxy_mode, tg_bot_token, tg_chat_id } = req.body ?? {};
+  const stmts: D1PreparedStatement[] = [];
+
+  if (proxy_mode !== undefined) {
+    if (!["node", "local", "direct"].includes(proxy_mode)) {
+      return json(400, { error: "proxy_mode 必须为 node / local / direct" });
+    }
+    stmts.push(
+      env.EMBY_DB.prepare("UPDATE config_meta SET proxy_mode = ? WHERE id = 1").bind(proxy_mode),
+    );
   }
-  await env.EMBY_DB.prepare("UPDATE config_meta SET proxy_mode = ? WHERE id = 1").bind(proxy_mode).run();
-  const config = await readConfigMeta(env);
-  return json(200, { ok: true, proxy_mode: config.proxy_mode });
+
+  if (tg_bot_token !== undefined || tg_chat_id !== undefined) {
+    if (typeof tg_bot_token !== "string" || typeof tg_chat_id !== "string") {
+      return json(400, { error: "tg_bot_token 与 tg_chat_id 需同时提交" });
+    }
+    const token = tg_bot_token.trim();
+    const chatId = tg_chat_id.trim();
+    if ((token === "") !== (chatId === "")) {
+      return json(400, { error: "bot token 与 chat id 需同时填写或同时清空" });
+    }
+    if (token.length > 200 || chatId.length > 64) {
+      return json(400, { error: "bot token / chat id 长度超限" });
+    }
+    stmts.push(
+      env.EMBY_DB.prepare(
+        "UPDATE config_meta SET tg_bot_token = ?, tg_chat_id = ? WHERE id = 1",
+      ).bind(token, chatId),
+    );
+  }
+
+  if (stmts.length === 0) {
+    return json(400, { error: "没有可更新的配置项" });
+  }
+  await env.EMBY_DB.batch(stmts);
+  const [config, tg] = await Promise.all([readConfigMeta(env), readTgConfig(env)]);
+  return json(200, {
+    ok: true,
+    proxy_mode: config.proxy_mode,
+    tg_bot_token: tg.botToken,
+    tg_chat_id: tg.chatId,
+  });
+}
+
+// TG 通知测试：优先用请求携带的值（支持保存前先测），否则回落到已存配置
+export async function handleTestTg(req: JsonRequest, env: Env): Promise<Response> {
+  let botToken = typeof req.body?.bot_token === "string" ? req.body.bot_token.trim() : "";
+  let chatId = typeof req.body?.chat_id === "string" ? req.body.chat_id.trim() : "";
+  if (!botToken && !chatId) {
+    const stored = await readTgConfig(env);
+    botToken = stored.botToken;
+    chatId = stored.chatId;
+  }
+  if (!botToken || !chatId) {
+    return json(400, { error: "bot token 与 chat id 需同时填写（或先保存配置）" });
+  }
+  const result = await sendTelegramMessage(
+    botToken,
+    chatId,
+    `✅ Emby Router 测试通知\n时间: ${new Date().toISOString()}\n配置生效后，新 IP 连入 /emby 时会推送类似消息`,
+  );
+  if (!result.ok) {
+    return json(400, { error: `Telegram 发送失败: ${result.error}` });
+  }
+  return json(200, { ok: true });
 }
 
 export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionContext): Promise<Response> {

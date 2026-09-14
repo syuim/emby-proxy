@@ -668,7 +668,7 @@
       const DOUBAN_EMBY_NAME = "douban";
       const MODE_LABELS = { node: "Node（组路由）", local: "Worker 代理", direct: "直连" };
       const $app = document.getElementById("app");
-      const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
+      const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups", "config"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", tgBotToken: "", tgChatId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -757,6 +757,8 @@
         state.groups = g.groups || [];
         state.health = h.nodes || {};
         state.proxyMode = c.proxy_mode || "node";
+        state.tgBotToken = c.tg_bot_token || "";
+        state.tgChatId = c.tg_chat_id || "";
         state.diag = d || null;
         render();
       }
@@ -878,6 +880,7 @@
               <div class="tabs" id="nav-tabs">
                 <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
                 <button data-tab="groups" class="${state.tab === "groups" ? "active" : ""}">代理组 + 节点</button>
+                <button data-tab="config" class="${state.tab === "config" ? "active" : ""}">配置</button>
               </div>
               <div class="mode-selector">
                 <label class="mode-label">模式</label>
@@ -919,7 +922,8 @@
           };
         });
         if (state.tab === "embys") renderEmbys();
-        else renderGroups();
+        else if (state.tab === "groups") renderGroups();
+        else renderConfig();
       }
 
       function renderLogin() {
@@ -1289,6 +1293,64 @@
           };
         });
         wireNodePanel();
+      }
+
+      // ---------- 配置（Telegram 通知） ----------
+      function renderConfig() {
+        const c = $app.querySelector("#tab-content");
+        const configured = !!(state.tgBotToken && state.tgChatId);
+        c.innerHTML = `
+          <div class="panel">
+            <div class="toolbar">
+              <h2>Telegram 通知</h2>
+              <span class="badge ${configured ? "ok" : "unknown"}">${configured ? "已配置" : "未配置"}</span>
+            </div>
+            <p class="hint" style="margin:-6px 0 14px;">
+              新 IP 首次连入 Emby 代理（名称访问 / 地址访问）时推送 TG 通知；未配置前不记录任何 IP。
+              Bot Token 在 @BotFather 创建 bot 获取；Chat ID 为接收通知的会话 id（先向 bot 发送一条消息，再从 getUpdates 获取；群组为负数）。
+            </p>
+            <div class="field">
+              <label>Bot Token</label>
+              <div style="display:flex;gap:8px;">
+                <input type="password" id="tg-token" class="mono" style="flex:1;" value="${escapeHtml(state.tgBotToken)}" placeholder="123456789:AAF..." autocomplete="off" />
+                <button class="btn btn-ghost" id="tg-eye" title="显示 / 隐藏">👁</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Chat ID (uid)</label>
+              <input id="tg-chat" class="mono" value="${escapeHtml(state.tgChatId)}" placeholder="例如 123456789" autocomplete="off" />
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <button class="btn btn-primary" id="tg-save">保存</button>
+              <button class="btn btn-ghost" id="tg-test">发送测试通知</button>
+            </div>
+          </div>
+        `;
+        const $token = c.querySelector("#tg-token");
+        const $chat = c.querySelector("#tg-chat");
+        c.querySelector("#tg-eye").onclick = () => {
+          $token.type = $token.type === "password" ? "text" : "password";
+        };
+        c.querySelector("#tg-save").onclick = async () => {
+          try {
+            const r = await api("/emby/admin/api/config", {
+              method: "PUT",
+              body: JSON.stringify({ tg_bot_token: $token.value.trim(), tg_chat_id: $chat.value.trim() }),
+            });
+            toast(r.tg_bot_token ? "已保存，新 IP 连入将推送通知" : "已清空，TG 通知已关闭", "ok");
+            await refreshAll();
+          } catch (e) { toast(e.message, "err"); }
+        };
+        c.querySelector("#tg-test").onclick = async () => {
+          try {
+            // 用当前输入值直接测试，无需先保存
+            await api("/emby/admin/api/config/test-tg", {
+              method: "POST",
+              body: JSON.stringify({ bot_token: $token.value.trim(), chat_id: $chat.value.trim() }),
+            });
+            toast("测试通知已发送，请查看 Telegram", "ok");
+          } catch (e) { toast(e.message, "err"); }
+        };
       }
 
       // 添加/编辑组弹窗：编辑态点保存才生效

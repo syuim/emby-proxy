@@ -16,6 +16,7 @@ import {
   handleListNodes,
   handleManualSync,
   handleProbe,
+  handleTestTg,
   handleUpdateConfig,
   handleUpdateEmby,
   handleUpdateGroup,
@@ -150,10 +151,13 @@ export async function routeAdmin(request: Request, env: Env, ctx: ExecutionConte
     });
   }
 
-  // 全局代理模式
+  // 全局代理模式 + TG 通知配置
   if (path === "/admin/api/config") {
     if (method === "GET") return handleGetConfig(env);
     if (method === "PUT") return wrapJson(request, (req) => handleUpdateConfig(req, env));
+  }
+  if (path === "/admin/api/config/test-tg" && method === "POST") {
+    return wrapJson(request, (req) => handleTestTg(req, env));
   }
 
   // Health & manual sync & probe

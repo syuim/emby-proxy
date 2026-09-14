@@ -64,6 +64,8 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 修改 emby 字段请使用定向 `UPDATE`，不要走整表 DELETE + 重插。整表 DELETE + 重插是单个事务，任意一行写入失败会静默回滚全部改动。
 
+`0013_tg_notify.sql`：`config_meta` 增 `tg_bot_token` / `tg_chat_id`（TEXT NOT NULL DEFAULT ''，TG 通知配置），新增 `seen_ips` 表（新 IP 通知去重，仅 Worker 内部使用，不进入 sync 协议）。
+
 ### 代理组相关（migration 0007 / 0012）
 
 `0007_proxy_groups_isp.sql` 新增：`nodes.isp_tags`（JSON 字符串数组 `["ct","cu","cm"]`，空数组 = 未标注/任何网络可选）、`proxy_groups` 表、`node_groups`（node ↔ 组多对多，无外键，应用层维护）、`embys.group_id`（可空，`NULL` = 未绑定组）。`0012_node_groups_backup.sql` 为 `node_groups` 增加 `is_backup` 列（0 = 主成员，1 = 备用节点；备用仅在组内主成员全部失效时启用，不参与常规负载）。同一 node 不能同时为主成员与备用节点，互斥由 API/UI 层校验；成员变更走全量覆盖（`DELETE FROM node_groups WHERE group_id = ?` + 重插），PUT 只显式传一侧字段时另一侧保持现状。
@@ -113,6 +115,18 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 全局模式（local/direct）优先于组：绑组 emby 在全局 local/direct 下仍走全局语义。
 
 健康检测：cron 每 5 分钟探活（`wrangler.toml` 的 `crons = ["*/5 * * * *"]`），连续 2 次失败降级 / 1 次成功恢复。节点连续失败 ≥5 次后，30 分钟内只真实探测一次；探测成功后若节点 `applied_version` 落后 `config_meta.version`，会异步补推一次配置。
+
+## Telegram 通知（新 IP 告警）
+
+管理 UI「配置」tab 填写 TG bot token + chat id（uid），存 D1 `config_meta.tg_bot_token/tg_chat_id`：`GET/PUT /admin/api/config`（`proxy_mode` 与 tg 两字段均为部分更新，tg 两字段需成对提交、同空 = 关闭通知）；`POST /admin/api/config/test-tg` 用请求携带的输入值直接测试（未携带则用已存配置），失败透出 TG 的 `description`。改 TG 配置**不 bump version、不 fan-out**。
+
+触发范围：`/emby/<name>`（emby 解析成功后）与 `/emby/<url>` 地址访问**原样形式**；不含 `/doubanapi`（公开 addon 入口，避免刷屏）、`/tmdb`、`/url`、admin、未知 emby 名 404，OPTIONS 跳过。
+
+实现（`cf-worker/src/notify.ts`，钩子在 `router.ts`）：
+- `seen_ips` 表是去重真源（`INSERT ... ON CONFLICT(ip) DO NOTHING` + `meta.changes` 判「真新 IP」，跨 isolate 并发不重复通知）；isolate 内 Set 缓存已记录 IP，避免每请求 D1 往返（上限 2000，超限清空）；概率 1/200 顺带清理 180 天前记录。
+- 未配置 TG 时不落库不缓存（配置前的访问在配置后仍会被通知）；TG 配置读取带 60s isolate TTL 缓存（懒传播，值仍以 D1 为准）。
+- 整条链路（D1 写入 + TG 发送）在 `ctx.waitUntil` 内执行，不占客户端请求延迟；TG 发送失败只记日志（`[notify] new-ip ... tg=failed`），不影响客户端响应。
+- 消息纯文本（不用 Markdown，避免 UA/路径里的 `_` 触发 TG 400），含 IP / 运营商归类 / ASN 组织 / 国家城市 / 目标 / 方法+pathname（不含 query）/ UA / 时间，均截断，总长 ≤4000。
 
 ## Required Environment Variables
 
@@ -164,4 +178,4 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 |---|---|---|
 | 1 | 节点日志（dash） | `ssh -i ~/.ssh/syu_vps -p 22 admin@dash.127315.xyz 'sudo docker logs --tail 100 proxy-go-emby-proxy-1'` |
 | 2 | Worker 实时日志 | `cd cf-worker && npx wrangler tail --format pretty` |
-| 3 | D1 数据（无 KV，全在 D1） | `cd cf-worker && CLOUDFLARE_ACCOUNT_ID=9a2c5f84e3346b4d2310792e4f759881 npx wrangler d1 execute emby-proxy --remote --json --command "SELECT * FROM embys"`（表：`nodes` / `embys` / `health` / `config_meta`） |
+| 3 | D1 数据（无 KV，全在 D1） | `cd cf-worker && CLOUDFLARE_ACCOUNT_ID=9a2c5f84e3346b4d2310792e4f759881 npx wrangler d1 execute emby-proxy --remote --json --command "SELECT * FROM embys"`（表：`nodes` / `embys` / `health` / `config_meta` / `seen_ips`） |

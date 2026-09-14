@@ -62,6 +62,21 @@ export async function readConfigMeta(env: Env): Promise<ConfigMeta> {
   };
 }
 
+// TG 配置单独读取（不进 readConfigMeta 热路径）：migration 未跑时兜底为空，不炸调用方
+export async function readTgConfig(
+  env: Env,
+): Promise<{ botToken: string; chatId: string }> {
+  try {
+    const res = await env.EMBY_DB.prepare(
+      "SELECT tg_bot_token, tg_chat_id FROM config_meta WHERE id = 1",
+    ).first<{ tg_bot_token: string | null; tg_chat_id: string | null }>();
+    return { botToken: res?.tg_bot_token ?? "", chatId: res?.tg_chat_id ?? "" };
+  } catch (e) {
+    console.log("readTgConfig failed:", (e as Error).message);
+    return { botToken: "", chatId: "" };
+  }
+}
+
 export async function readEmbys(env: Env): Promise<EmbysKV> {
   const [embysRes, verRes] = await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(

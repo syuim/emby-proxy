@@ -2,6 +2,7 @@ import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_EMBY_N
 import { handleUrlRequest } from "./urlproxy";
 import { readConfigMeta, readEmbys, readNodes } from "./storage";
 import { chooseNodeFromGroup, classifyClientIsp } from "./group";
+import { notifyNewIp } from "./notify";
 import type { Env } from "./types";
 
 
@@ -9,6 +10,7 @@ import type { Env } from "./types";
 export async function handleClientRequest(
   request: Request,
   env: Env,
+  ctx?: ExecutionContext,
 ): Promise<Response> {
   const path = new URL(request.url).pathname;
   const segments = path.split("/").filter(Boolean); // ["emby", <name>, ...subpath]
@@ -19,17 +21,20 @@ export async function handleClientRequest(
   if (RESERVED_NAMES.has(embyName.toLowerCase())) {
     return notFound("reserved path");
   }
-  return routeNameAccess(request, env, embyName, "/" + segments.slice(2).join("/"));
+  return routeNameAccess(request, env, ctx, embyName, "/" + segments.slice(2).join("/"), true);
 }
 
 // 名称访问统一分发：/emby/<name>/<subpath> 与 /doubanapi 别名（固定 emby 记录名）共用。
 // 规则：direct → 307 直连；local → Worker 本地代理；node → 绑组走组路由（overseas
 // 入口先 307 直连，国内按入口 ASN 过滤组内节点后轮询 307），未绑组/全灭 → Worker local。
+// notify=true 时才做新 IP TG 通知（仅 /emby 名称访问；/doubanapi 公开 addon 入口不通知）。
 async function routeNameAccess(
   request: Request,
   env: Env,
+  ctx: ExecutionContext | undefined,
   embyName: string,
   subpath: string,
+  notify: boolean,
 ): Promise<Response> {
   const url = new URL(request.url);
   const [embysKV, nodesKV, configMeta] = await Promise.all([
@@ -41,6 +46,10 @@ async function routeNameAccess(
   const emby = embysKV.embys.find((e) => e.name === embyName);
   if (!emby) {
     return notFound(`unknown emby '${embyName}'`);
+  }
+
+  if (notify && request.method !== "OPTIONS") {
+    notifyNewIp(request, env, ctx, "emby=" + emby.name);
   }
 
   const clientIp = request.headers.get("CF-Connecting-IP") ?? "-";
@@ -334,7 +343,11 @@ export function doubanApiSubpath(pathname: string): string {
   return pathname.slice(DOUBAN_API_BASE_PATH.length) || "/";
 }
 
-export async function handleDoubanApiRequest(request: Request, env: Env): Promise<Response> {
+export async function handleDoubanApiRequest(
+  request: Request,
+  env: Env,
+  ctx?: ExecutionContext,
+): Promise<Response> {
   if (request.method === "OPTIONS") {
     // 预检由 Worker 直接应答，避免被 307 到节点/后端（浏览器 addon 依赖）
     return new Response(null, {
@@ -348,11 +361,14 @@ export async function handleDoubanApiRequest(request: Request, env: Env): Promis
     });
   }
 
+  // 公开 addon 入口：所有 addon 用户都会连入，不触发新 IP 通知（notify=false）
   return routeNameAccess(
     request,
     env,
+    ctx,
     DOUBAN_API_EMBY_NAME,
     doubanApiSubpath(new URL(request.url).pathname),
+    false,
   );
 }
 
@@ -361,6 +377,7 @@ export async function handleDoubanApiRequest(request: Request, env: Env): Promis
 export async function handleDirectRequest(
   request: Request,
   env: Env,
+  ctx?: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -419,6 +436,12 @@ export async function handleDirectRequest(
       }
     }
     // 3 次都撞名（理论不可能）→ 仍按未注册处理，改写走编码地址形式
+  }
+
+  // 新 IP 通知：只认原样形式（用户粘贴的真实入口）；编码形式是 CDN 回流，
+  // 一次播放几十上百请求，不能触发通知
+  if (rawForm && request.method !== "OPTIONS") {
+    notifyNewIp(request, env, ctx, "地址访问 " + parsed.host);
   }
 
   // 地址访问必走本地代理。未注册的源（CDN 回流）：无名称前缀，改写全部用编码地址形式
