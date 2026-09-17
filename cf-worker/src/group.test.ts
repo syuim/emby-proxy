@@ -1,15 +1,16 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { __resetAliveCacheForTests } from "./alive";
-import { chooseNodeFromGroup, matchIspPool } from "./group";
+import { chooseNodeFromGroup, matchIspPool, pickWeighted } from "./group";
 import type { Env, NodeRecord } from "./types";
 
-function makeNode(id: string, ispTags: string[] = [], disabled = false): NodeRecord {
+function makeNode(id: string, ispTags: string[] = [], disabled = false, weight = 1): NodeRecord {
   return {
     id,
     name: id,
     public_url: `https://${id}.example.com`,
     created_at: "2026-01-01T00:00:00Z",
     isp_tags: ispTags,
+    weight,
     disabled,
   };
 }
@@ -41,6 +42,7 @@ function stubEnv(groupId: number, primary: string[], backup: string[] = []): Env
 const origFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = origFetch;
+  vi.restoreAllMocks();
 });
 beforeEach(() => {
   __resetAliveCacheForTests();
@@ -78,6 +80,52 @@ describe("matchIspPool", () => {
 
   it("匹配集非空时不回退（cu 组 + ct 入口保留 cu 池）", () => {
     expect(matchIspPool([nCt, nCu], "cu").map((n) => n.id)).toEqual(["n-cu"]);
+  });
+});
+
+describe("pickWeighted", () => {
+  it("按权重划分区间（固定 Math.random 验证落点）", () => {
+    const a = makeNode("a", [], false, 1);
+    const b = makeNode("b", [], false, 9);
+    const spy = vi.spyOn(Math, "random");
+    spy.mockReturnValue(0.05); // r = 0.5 → 落在 a 的 [0,1)
+    expect(pickWeighted([a, b]).id).toBe("a");
+    spy.mockReturnValue(0.5); // r = 5 → 落在 b 的 [1,10)
+    expect(pickWeighted([a, b]).id).toBe("b");
+    spy.mockReturnValue(0.999); // 上边界附近仍落在 b
+    expect(pickWeighted([a, b]).id).toBe("b");
+  });
+
+  it("单节点池恒定返回该节点", () => {
+    const a = makeNode("a");
+    for (let i = 0; i < 10; i++) {
+      expect(pickWeighted([a]).id).toBe("a");
+    }
+  });
+
+  it("非法权重（NaN/0）兜底按 1 计", () => {
+    const a = makeNode("a");
+    a.weight = NaN;
+    const b = makeNode("b");
+    b.weight = 0;
+    const spy = vi.spyOn(Math, "random");
+    spy.mockReturnValue(0.25); // 等权 total=2：r=0.5 → a
+    expect(pickWeighted([a, b]).id).toBe("a");
+    spy.mockReturnValue(0.75); // r=1.5 → b
+    expect(pickWeighted([a, b]).id).toBe("b");
+  });
+
+  it("统计：1:9 权重抽样万次占比收敛在 0.9 附近", () => {
+    const a = makeNode("a", [], false, 1);
+    const b = makeNode("b", [], false, 9);
+    let hitB = 0;
+    const n = 10000;
+    for (let i = 0; i < n; i++) {
+      if (pickWeighted([a, b]).id === "b") hitB++;
+    }
+    const ratio = hitB / n;
+    expect(ratio).toBeGreaterThan(0.86);
+    expect(ratio).toBeLessThan(0.94);
   });
 });
 
@@ -233,6 +281,34 @@ describe("chooseNodeFromGroup", () => {
       expect(pick).not.toBeNull();
       expect(["n-cu", "n-cm"]).toContain(pick!.node.id);
       expect(pick!.stage).toBe("fallback");
+    }
+  });
+
+  // ---------- 节点权重 ----------
+
+  it("池内按权重倾斜：低权节点被选中次数显著更少", async () => {
+    const env = stubEnv(1, ["n-low", "n-high"]);
+    mockNodeHealth(new Set(["n-low", "n-high"]));
+    const nodes = [makeNode("n-low", [], false, 1), makeNode("n-high", [], false, 9)];
+    let low = 0;
+    const n = 1000;
+    for (let i = 0; i < n; i++) {
+      const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+      expect(pick).not.toBeNull();
+      expect(pick!.stage).toBe("primary");
+      if (pick!.node.id === "n-low") low++;
+    }
+    expect(low / n).toBeLessThan(0.2);
+  });
+
+  it("权重不改变池优先级：主池可用时不选权重更高的备用节点", async () => {
+    const env = stubEnv(1, ["n-main"], ["n-back"]);
+    mockNodeHealth(new Set(["n-main", "n-back"]));
+    const nodes = [makeNode("n-main", ["ct"], false, 1), makeNode("n-back", ["ct"], false, 100)];
+    for (let i = 0; i < 20; i++) {
+      const pick = await chooseNodeFromGroup(env, 1, nodes, "ct");
+      expect(pick!.node.id).toBe("n-main");
+      expect(pick!.stage).toBe("primary");
     }
   });
 });

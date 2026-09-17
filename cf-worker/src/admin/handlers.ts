@@ -32,6 +32,24 @@ const GROUP_NAME_MAX = 32;
 
 const ISP_TAG_ORDER = ["ct", "cu", "cm"];
 
+const NODE_WEIGHT_DEFAULT = 1;
+const NODE_WEIGHT_MIN = 1;
+const NODE_WEIGHT_MAX = 100;
+
+// 节点权重解析：undefined = 未传（不更新）；null = 非法；number = 合法值
+function parseWeightInput(v: unknown): number | null | undefined {
+  if (v === undefined) return undefined;
+  const n =
+    typeof v === "number"
+      ? v
+      : typeof v === "string" && v.trim() !== ""
+        ? Number(v)
+        : NaN;
+  return Number.isInteger(n) && n >= NODE_WEIGHT_MIN && n <= NODE_WEIGHT_MAX
+    ? n
+    : null;
+}
+
 function parseIspTagsInput(v: unknown): string[] | null {
   if (v === undefined) return null;
   if (!Array.isArray(v)) return [];
@@ -135,6 +153,10 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionCo
   if (ispTags === null) {
     return json(400, { error: "isp_tags 只能包含 ct / cu / cm" });
   }
+  const weight = parseWeightInput(req.body?.weight);
+  if (weight === null) {
+    return json(400, { error: "weight 必须是 1~100 的整数" });
+  }
   const trimmed = { name: name.trim(), public_url: normalizeUrl(public_url) };
   const validation = validateNode(trimmed);
   if (validation) return json(400, { error: validation });
@@ -152,13 +174,14 @@ export async function handleAddNode(req: JsonRequest, env: Env, ctx: ExecutionCo
     public_url: trimmed.public_url,
     created_at: new Date().toISOString(),
     isp_tags: ispTags ?? [],
+    weight: weight ?? NODE_WEIGHT_DEFAULT,
     disabled: false,
   };
   nodes.nodes.push(newNode);
   const stmts: D1PreparedStatement[] = [
     env.EMBY_DB.prepare(
-      "INSERT INTO nodes(id, name, public_url, created_at, isp_tags) VALUES(?,?,?,?,?)",
-    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.created_at, JSON.stringify(newNode.isp_tags)),
+      "INSERT INTO nodes(id, name, public_url, created_at, isp_tags, weight) VALUES(?,?,?,?,?,?)",
+    ).bind(newNode.id, newNode.name, newNode.public_url, newNode.created_at, JSON.stringify(newNode.isp_tags), newNode.weight),
   ];
   await env.EMBY_DB.batch(stmts);
   // 添加节点后立即探测，写入健康状态
@@ -182,7 +205,7 @@ export async function handleUpdateNode(
   if (!node) return json(404, { error: "节点不存在" });
 
   let changed = false;
-  let configChanged = false; // name/public_url 变化影响探活与推送；isp_tags/disabled 只影响 Worker 路由
+  let configChanged = false; // name/public_url 变化影响探活与推送；isp_tags/weight/disabled 只影响 Worker 路由
   const { name, public_url, disabled } = req.body ?? {};
   if (disabled !== undefined && typeof disabled !== "boolean") {
     return json(400, { error: "disabled 必须是布尔值" });
@@ -226,16 +249,25 @@ export async function handleUpdateNode(
       changed = true;
     }
   }
+  // weight 可选：未传不更新（部分更新语义）。仅影响 Worker 路由，不触发 fanout
+  const weight = parseWeightInput(req.body?.weight);
+  if (weight === null) {
+    return json(400, { error: "weight 必须是 1~100 的整数" });
+  }
+  if (weight !== undefined && weight !== node.weight) {
+    node.weight = weight;
+    changed = true;
+  }
   if (!changed) return json(200, { ok: true, node, skipped: true });
   const stmts: D1PreparedStatement[] = [
     env.EMBY_DB.prepare(
-      "UPDATE nodes SET name = ?, public_url = ?, isp_tags = ?, disabled = ? WHERE id = ?",
-    ).bind(node.name, node.public_url, JSON.stringify(node.isp_tags), node.disabled ? 1 : 0, id),
+      "UPDATE nodes SET name = ?, public_url = ?, isp_tags = ?, weight = ?, disabled = ? WHERE id = ?",
+    ).bind(node.name, node.public_url, JSON.stringify(node.isp_tags), node.weight, node.disabled ? 1 : 0, id),
   ];
   await env.EMBY_DB.batch(stmts);
   // 节点 URL 变更不影响 emby 配置（节点上仍是同一份 snapshot），
   // 但探活/推送会指向新地址，故推一次让各节点版本对齐、触发 cron 用新 URL 探测。
-  // isp_tags/disabled 仅 Worker 路由使用，不进入 sync 协议，单独变更无需推送。
+  // isp_tags/weight/disabled 仅 Worker 路由使用，不进入 sync 协议，单独变更无需推送。
   if (configChanged) {
     const push = await fanoutPush(env, await readEmbys(env), nodes, "update-node");
     return json(200, { ok: true, node, push_results: push });

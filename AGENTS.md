@@ -66,6 +66,8 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 `0013_tg_notify.sql`：`config_meta` 增 `tg_bot_token` / `tg_chat_id`（TEXT NOT NULL DEFAULT ''，TG 通知配置），新增 `seen_ips` 表（新 IP 通知去重，仅 Worker 内部使用，不进入 sync 协议）。
 
+`0014_nodes_weight.sql`：`nodes` 增 `weight`（INTEGER NOT NULL DEFAULT 1，取值 1~100）。组路由池内选择由轮询改为**按权重加权随机**（权重 n 的节点被选中概率为 n / 池内权重总和，无状态、跨 isolate 天然分散）；只影响 Worker 路由，不进 sync 协议，编辑权重不 bump version、不 fan-out。
+
 ### 代理组相关（migration 0007 / 0012）
 
 `0007_proxy_groups_isp.sql` 新增：`nodes.isp_tags`（JSON 字符串数组 `["ct","cu","cm"]`，空数组 = 未标注/任何网络可选）、`proxy_groups` 表、`node_groups`（node ↔ 组多对多，无外键，应用层维护）、`embys.group_id`（可空，`NULL` = 未绑定组）。`0012_node_groups_backup.sql` 为 `node_groups` 增加 `is_backup` 列（0 = 主成员，1 = 备用节点；备用仅在组内主成员全部失效时启用，不参与常规负载）。同一 node 不能同时为主成员与备用节点，互斥由 API/UI 层校验；成员变更走全量覆盖（`DELETE FROM node_groups WHERE group_id = ?` + 重插），PUT 只显式传一侧字段时另一侧保持现状。
@@ -94,7 +96,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 代理模式是全局配置（`config_meta.proxy_mode`，管理 UI 顶部切换）：`node` / `local`（Worker 代理）/ `direct`（直连）。**节点只通过代理组使用**：node 模式下绑组 emby 走代理组路由，未绑组 emby 直接 Worker local（不探测任何节点）。全局节点选择 / `active_node_id` / 故障转移机制已移除（migration 0008 删除 `config_meta.active_node_id` 列）。`embys.node_id` 仅保留一个用途：`'local'` 标记自动注册的 d_xxx emby（地址访问回流产物，始终强制 Worker 本地代理，不受全局模式影响）。
 
-- **绑组 emby（node 模式）**：入口为 overseas（海外/不可判 ASN）时**先于组路由直接 307 直连 emby 后端**（日志 `mode=direct reason=isp-overseas`，等同全局 direct 语义，不经节点）；国内入口（ct/cu/cm）组内每请求并发存活探测（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），按入口 ISP 过滤后轮询 307 到节点（isolate 内 round-robin，跨 isolate 自然分散）；主成员全部失效（含禁用）**或存活但均无法匹配入口网络**时启用备用节点池（同样探测 + ISP 过滤后轮询）；备用也无可选/组不存在/无主无备 → Worker local 兜底。
+- **绑组 emby（node 模式）**：入口为 overseas（海外/不可判 ASN）时**先于组路由直接 307 直连 emby 后端**（日志 `mode=direct reason=isp-overseas`，等同全局 direct 语义，不经节点）；国内入口（ct/cu/cm）组内每请求并发存活探测（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），按入口 ISP 过滤后按节点权重加权随机 307 到节点（无状态、跨 isolate 天然分散）；主成员全部失效（含禁用）**或存活但均无法匹配入口网络**时启用备用节点池（同样探测 + ISP 过滤后加权随机）；备用也无可选/组不存在/无主无备 → Worker local 兜底。
 - **未绑组 emby（node 模式）**：直接 Worker local（日志 `mode=local reason=no-group`）。
 - **本地代理**：Worker 直接 fetch 后端回传，隐藏客户端真实 IP，并对后端 302 / PlaybackInfo / M3U8 切片里的绝对 URL 做同源/跨域改写：同源改写为名称形式 `/emby/<name>/path`，跨域（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。
 - 全局模式切换（PUT `/admin/api/config`）只改 `config_meta.proxy_mode`，不写 `embys` 表，也不 bump version / fan-out（节点 snapshot 只含 path_prefix/backend_url，与模式无关）。
@@ -107,9 +109,9 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 1. 取组内 node：主成员（`is_backup=0`）与备用节点（`is_backup=1`）分开成两级池；两池皆空 → Worker local 兜底。
 2. 两级池节点一次性**并发存活探测**（`probeAlive`，复用 30s/15s 非对称 TTL 缓存），得存活集合。
 3. **入口网络判定**：`request.cf.asn` 查 `isp.ts` 表（未命中用 `asOrganization` 强关键字二次兜底），输出 ct/cu/cm/overseas（overseas 含海外与不可判 ASN；无独立 unknown）。
-4. **主池选择**：主成员存活且匹配入口网络（node 无标签 = 全兼容）→ 轮询 307（日志 `stage=primary`；round-robin 计数器在 isolate 内递增，跨 isolate 自然分散）。
+4. **主池选择**：主成员存活且匹配入口网络（node 无标签 = 全兼容）→ 按权重加权随机 307（日志 `stage=primary`；按 `nodes.weight` 加权，无状态跨 isolate 天然分散）。
 5. **主池不可用 → 备用池**：主池无主成员 / 全部失效（含禁用）/ 存活但均无网络匹配时，对备用池按同规则（存活 + ISP 过滤）选择 → 命中 307（日志 `stage=backup`）。
-6. **两级均无网络匹配**（仅 ct/cu/cm 入口能到达此步）：从主∪备全部存活中轮询错配兜底（日志 `stage=fallback`，宁可错配不断流）。
+6. **两级均无网络匹配**（仅 ct/cu/cm 入口能到达此步）：从主∪备全部存活中加权随机错配兜底（日志 `stage=fallback`，宁可错配不断流）。
 7. **全灭兜底**：两级池均无存活 node → Worker local 代理兜底。cron 探活本就全量探测所有 node（与组无关），health 表天然覆盖组内主备成员。
 
 全局模式（local/direct）优先于组：绑组 emby 在全局 local/direct 下仍走全局语义。

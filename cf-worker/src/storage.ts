@@ -27,13 +27,14 @@ function parseIspTags(raw: string | null): string[] {
 
 export async function readNodes(env: Env): Promise<NodesKV> {
   const res = await env.EMBY_DB.prepare(
-    "SELECT id, name, public_url, created_at, isp_tags, disabled FROM nodes ORDER BY created_at, id",
+    "SELECT id, name, public_url, created_at, isp_tags, weight, disabled FROM nodes ORDER BY created_at, id",
   ).all<{
     id: string;
     name: string;
     public_url: string;
     created_at: string;
     isp_tags: string | null;
+    weight: number;
     disabled: number;
   }>();
   if (!res.success || !res.results) return structuredClone(EMPTY_NODES);
@@ -44,6 +45,7 @@ export async function readNodes(env: Env): Promise<NodesKV> {
       public_url: r.public_url,
       created_at: r.created_at,
       isp_tags: parseIspTags(r.isp_tags),
+      weight: Number.isInteger(r.weight) && r.weight > 0 ? r.weight : 1,
       disabled: r.disabled === 1,
     })),
   };

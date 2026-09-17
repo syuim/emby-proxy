@@ -28,21 +28,27 @@ export function matchIspPool(alive: NodeRecord[], isp: IspClass): NodeRecord[] {
   );
 }
 
-// 轮询计数器：CF Worker 无跨 isolate 共享状态，isolate 内严格轮询、跨 isolate
-// 自然分散；统计均匀性优于纯随机，且零额外成本（模块级计数随 isolate 回收重置）。
-let rrIndex = 0;
-
-function pickRoundRobin(pool: NodeRecord[]): NodeRecord {
-  return pool[rrIndex++ % pool.length]!;
+// 池内按节点权重加权随机（无状态，跨 isolate 天然分散）：权重 n 的节点被选中
+// 概率为 n / 池内权重总和；非法权重（非正整数）兜底按 1 计。
+export function pickWeighted(pool: NodeRecord[]): NodeRecord {
+  const weightOf = (n: NodeRecord) =>
+    Number.isInteger(n.weight) && n.weight > 0 ? n.weight : 1;
+  const total = pool.reduce((s, n) => s + weightOf(n), 0);
+  let r = Math.random() * total;
+  for (const n of pool) {
+    r -= weightOf(n);
+    if (r < 0) return n;
+  }
+  return pool[pool.length - 1]!;
 }
 
 /**
  * per-emby 组路由，仅国内三大运营商入口（ct/cu/cm）会走到这里；overseas（海外或
  * 不可判 ASN）入口由 router 先行 307 直连 emby 后端（等同全局 direct 语义），
  * 本函数只做防御性兜底。两级池（主成员 / 备用节点）按优先级选择——
- * 1. 主池存活且匹配入口网络 → 轮询（stage=primary）；
+ * 1. 主池存活且匹配入口网络 → 按节点权重加权随机（stage=primary）；
  * 2. 主池在当前网络下不可用（全部失效 / 禁用 / 无主成员 / 存活但无 ISP 匹配）→ 备用池同规则选择（stage=backup）；
- * 3. 两级都无网络匹配 → 从主∪备全部存活中轮询错配兜底（stage=fallback，宁可错配不断流）；
+ * 3. 两级都无网络匹配 → 从主∪备全部存活中加权随机错配兜底（stage=fallback，宁可错配不断流）；
  * 4. 全部失效 / 组不存在 / 组内成员不在节点列表 → null（由调用方走 Worker local 兜底，不写 config_meta）。
  */
 export async function chooseNodeFromGroup(
@@ -70,7 +76,7 @@ export async function chooseNodeFromGroup(
   const matchedPrimary = matchIspPool(alivePrimary, isp);
   if (matchedPrimary.length > 0) {
     return {
-      node: pickRoundRobin(matchedPrimary),
+      node: pickWeighted(matchedPrimary),
       aliveNames: alivePrimary.map((n) => n.name),
       poolNames: matchedPrimary.map((n) => n.name),
       stage: "primary",
@@ -81,7 +87,7 @@ export async function chooseNodeFromGroup(
   const matchedBackup = matchIspPool(aliveBackup, isp);
   if (matchedBackup.length > 0) {
     return {
-      node: pickRoundRobin(matchedBackup),
+      node: pickWeighted(matchedBackup),
       aliveNames: aliveBackup.map((n) => n.name),
       poolNames: matchedBackup.map((n) => n.name),
       stage: "backup",
@@ -90,7 +96,7 @@ export async function chooseNodeFromGroup(
 
   // 主∪备有存活但都匹配不上入口网络（仅 ct/cu/cm 会走到这里）：宁可错配也不断流
   return {
-    node: pickRoundRobin(alive),
+    node: pickWeighted(alive),
     aliveNames: alive.map((n) => n.name),
     poolNames: alive.map((n) => n.name),
     stage: "fallback",
