@@ -72,7 +72,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 
 `0007_proxy_groups_isp.sql` 新增：`nodes.isp_tags`（JSON 字符串数组 `["ct","cu","cm"]`，空数组 = 未标注/任何网络可选）、`proxy_groups` 表、`node_groups`（node ↔ 组多对多，无外键，应用层维护）、`embys.group_id`（可空，`NULL` = 未绑定组）。`0012_node_groups_backup.sql` 为 `node_groups` 增加 `is_backup` 列（0 = 主成员，1 = 备用节点；备用仅在组内主成员全部失效时启用，不参与常规负载）。同一 node 不能同时为主成员与备用节点，互斥由 API/UI 层校验；成员变更走全量覆盖（`DELETE FROM node_groups WHERE group_id = ?` + 重插），PUT 只显式传一侧字段时另一侧保持现状。
 
-组/ISP 标签只影响 Worker 侧路由决策，**不进入 sync 协议**（节点 snapshot 仍是 path_prefix/backend_url），因此组 CRUD、成员变更、node isp_tags 编辑、emby 绑定/解绑组均**不 bump version、不 fan-out**。删组时应用层把引用它的 `embys.group_id` 置 NULL；删节点时清理 `node_groups` 关联。
+组/ISP 标签只影响 Worker 侧路由决策，**不进入 sync 协议**（节点 snapshot 仍是 path_prefix/backend_url），因此组 CRUD、成员变更、node isp_tags 编辑、emby 绑定/解绑组均**不 bump version、不 fan-out**。删组时应用层把引用它的 `embys.group_id` 置 NULL；删节点时清理 `node_groups` 关联；**节点被禁用时同步从所有组移除**（主/备一并删，与 nodes UPDATE 同一 batch；重新启用不会自动恢复组关系，需手动重新加入）。
 
 入口网络判定数据在 `cf-worker/src/isp.ts`（CAIDA 2026-08 快照归类 + 撞名核验，国内阿里云/腾讯云 ASN 写死归 ct），输出 ct/cu/cm/overseas：未命中（海外、教育网、广电、二级运营商、无 ASN 等）统一归 overseas，**没有独立的 unknown 类**。节点可标注标签只有 `ct / cu / cm`（`overseas` 已废弃，历史行惰性失效——不匹配任何入口，编辑保存即清除）；overseas 入口由 router 直接 307 到 emby 后端，不经节点。表更新时替换该文件三个 ASN Set 即可。
 

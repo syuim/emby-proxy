@@ -264,6 +264,11 @@ export async function handleUpdateNode(
       "UPDATE nodes SET name = ?, public_url = ?, isp_tags = ?, weight = ?, disabled = ? WHERE id = ?",
     ).bind(node.name, node.public_url, JSON.stringify(node.isp_tags), node.weight, node.disabled ? 1 : 0, id),
   ];
+  // 禁用节点视为不可达（probeAlive 恒 false），同步移出所有代理组（主成员/备用），
+  // 避免组内残留永远选不中的节点；重新启用不自动恢复组关系
+  if (node.disabled) {
+    stmts.push(env.EMBY_DB.prepare("DELETE FROM node_groups WHERE node_id = ?").bind(id));
+  }
   await env.EMBY_DB.batch(stmts);
   // 节点 URL 变更不影响 emby 配置（节点上仍是同一份 snapshot），
   // 但探活/推送会指向新地址，故推一次让各节点版本对齐、触发 cron 用新 URL 探测。

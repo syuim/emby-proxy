@@ -330,6 +330,17 @@
       tbody tr:last-child td { border-bottom: none; }
       .row-disabled td:not(.actions) { opacity: 0.45; text-decoration: line-through; }
       .row-disabled td:not(.actions) strong { color: var(--color-text-soft); }
+      /* badge 是 atomic inline-flex，td 的 line-through 不穿透它；用伪元素把删除线补画到 badge 之上 */
+      .row-disabled td:not(.actions) .badge { position: relative; }
+      .row-disabled td:not(.actions) .badge::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 50%;
+        height: 1px;
+        background: currentColor;
+      }
 
       /* ============ Badge ============ */
       .badge {
@@ -589,6 +600,7 @@
         .table-wrap-nodes td:nth-child(6) { display: none; }
 
         .row-disabled td:not(.actions) { text-decoration: none; }
+        .row-disabled td:not(.actions) .badge::after { display: none; }
 
         /* ===== 节点表卡片化 ===== */
         .table-wrap-nodes { overflow: visible; }
@@ -1186,12 +1198,17 @@
               const node = state.nodes.find((x) => x.id === id);
               if (!node) return;
               const next = !node.disabled;
+              const inGroups = state.groups.filter(
+                (g) => (g.node_ids || []).includes(id) || (g.backup_node_ids || []).includes(id),
+              ).length;
               try {
                 await api("/emby/admin/api/nodes/" + encodeURIComponent(id), {
                   method: "PUT",
                   body: JSON.stringify({ disabled: next }),
                 });
-                toast(next ? "已禁用节点" : "已启用节点", "ok");
+                toast(next
+                  ? (inGroups > 0 ? `已禁用节点，并从 ${inGroups} 个代理组移除` : "已禁用节点")
+                  : "已启用节点", "ok");
                 await refreshAll();
               } catch (e) { toast(e.message, "err"); }
             };
