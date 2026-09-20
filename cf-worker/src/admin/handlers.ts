@@ -457,6 +457,10 @@ function parseMemberSets(
   cur: MemberSet,
 ): { ok: true; value: MemberSet } | { ok: false; error: string } {
   const known = new Set(nodes.nodes.map((n) => n.id));
+  // 禁用节点视为不可达（禁用时也会被移出组），不允许再加入组；错误信息用节点名便于定位
+  const disabledNames = new Map(
+    nodes.nodes.filter((n) => n.disabled).map((n) => [n.id, n.name]),
+  );
   const next: MemberSet = { primary: cur.primary, backup: cur.backup };
   const fields: { key: keyof MemberSet; field: string }[] = [
     { key: "primary", field: "node_ids" },
@@ -472,6 +476,13 @@ function parseMemberSets(
     const unknown = ids.filter((x) => !known.has(x));
     if (unknown.length > 0) {
       return { ok: false, error: `未知节点: ${unknown.join(", ")}` };
+    }
+    const blocked = ids.filter((x) => disabledNames.has(x));
+    if (blocked.length > 0) {
+      return {
+        ok: false,
+        error: `已禁用节点不能加入组: ${blocked.map((x) => disabledNames.get(x)).join(", ")}`,
+      };
     }
     next[key] = ids;
   }
