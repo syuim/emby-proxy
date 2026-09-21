@@ -3,7 +3,7 @@ import { handleUrlRequest } from "./urlproxy";
 import { readConfigMeta, readEmbys, readNodes } from "./storage";
 import { chooseNodeFromGroup, classifyClientIsp } from "./group";
 import { notifyNewIp } from "./notify";
-import type { Env } from "./types";
+import type { EmbyRecord, Env } from "./types";
 
 
 
@@ -417,25 +417,7 @@ export async function handleDirectRequest(
   let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
   // 只在原样形式（用户粘贴入口）时自动注册；编码形式是改写回流（多为 CDN），不注册避免刷表
   if (!emby && rawForm) {
-    // 撞名极低概率，重试几次生成不同名字，避免直接 500。
-    // 定向 INSERT ON CONFLICT DO NOTHING：并发首访同一后端不会重复写，也不 bump version
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const name = await generateDirectEmbyName(backendOrigin, attempt);
-      const createdAt = new Date().toISOString();
-      const res = await env.EMBY_DB.prepare(
-        "INSERT INTO embys(name, backend_url, created_at) VALUES(?,?,?) ON CONFLICT(name) DO NOTHING",
-      ).bind(name, backendOrigin, createdAt).run();
-      if (res.meta.changes > 0) {
-        emby = {
-          name,
-          backend_url: backendOrigin,
-          group_id: null,
-          created_at: createdAt,
-        };
-        break;
-      }
-    }
-    // 3 次都撞名（理论不可能）→ 仍按未注册处理，改写走编码地址形式
+    emby = (await registerDirectEmby(env, backendOrigin)) ?? undefined;
   }
 
   // 新 IP 通知：只认原样形式（用户粘贴的真实入口）；编码形式是 CDN 回流，
@@ -449,13 +431,50 @@ export async function handleDirectRequest(
   return proxyLocal(request, target, emby?.name ?? "", emby ? emby.backend_url : "");
 }
 
-async function generateDirectEmbyName(backendUrl: string, attempt = 0): Promise<string> {
+export async function generateDirectEmbyName(backendUrl: string, attempt = 0): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(backendUrl));
   const hex = Array.from(new Uint8Array(hash, 0, 8))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
   // 撞名时加后缀重试（d_<hash> 或 d_<hash>-1/-2），仍在 32 字符上限内
   return attempt === 0 ? "d_" + hex : `d_${hex}-${attempt}`;
+}
+
+/**
+ * 自动注册 d_<hash> 记录：定向 INSERT ON CONFLICT(name) DO NOTHING，不 bump version。
+ * 并发首访同一后端（客户端一次加载会并发多个原样形式请求）时只有第一个 INSERT 成功，
+ * 撞名的其余请求必须先按 backend_url 回查——同 origin 已写入则复用该行（D1 写串行，
+ * 此时该行必已可见）；否则会把「自己撞自己」误判为 hash 撞名而插入 -1 后缀的重复记录。
+ * 回查不到才确属不同 origin 的同名 hash 碰撞（理论情况），换后缀重试；3 次皆失败返回 null。
+ */
+export async function registerDirectEmby(
+  env: Env,
+  backendOrigin: string,
+): Promise<EmbyRecord | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const name = await generateDirectEmbyName(backendOrigin, attempt);
+    const createdAt = new Date().toISOString();
+    const res = await env.EMBY_DB.prepare(
+      "INSERT INTO embys(name, backend_url, created_at) VALUES(?,?,?) ON CONFLICT(name) DO NOTHING",
+    ).bind(name, backendOrigin, createdAt).run();
+    if (res.meta.changes > 0) {
+      return { name, backend_url: backendOrigin, group_id: null, created_at: createdAt };
+    }
+    const existing = await env.EMBY_DB.prepare(
+      "SELECT name, backend_url, group_id, created_at FROM embys WHERE backend_url = ? LIMIT 1",
+    )
+      .bind(backendOrigin)
+      .first<{ name: string; backend_url: string; group_id: number | null; created_at: string }>();
+    if (existing) {
+      return {
+        name: existing.name,
+        backend_url: existing.backend_url,
+        group_id: existing.group_id ?? null,
+        created_at: existing.created_at,
+      };
+    }
+  }
+  return null;
 }
 
 // ponytail: simple IP check for SSRF at cf-worker level. Hostname-based SSRF is caught by proxy-go's isDangerousRedirect.

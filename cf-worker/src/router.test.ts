@@ -7,8 +7,11 @@ import {
   isTmdbImageSubpath,
   handleDoubanApiRequest,
   doubanApiSubpath,
+  registerDirectEmby,
+  generateDirectEmbyName,
 } from "./router";
 import { DOUBAN_API_BASE_PATH } from "./constants";
+import type { Env } from "./types";
 
 const origFetch = globalThis.fetch;
 afterEach(() => {
@@ -181,5 +184,100 @@ describe("douban api alias", () => {
     );
     expect(resp.status).toBe(204);
     expect(resp.headers.get("Access-Control-Allow-Origin")).toBe("*");
+  });
+});
+
+describe("registerDirectEmby", () => {
+  interface EmbyRow {
+    name: string;
+    backend_url: string;
+    created_at: string;
+    group_id: number | null;
+  }
+
+  // 极简 D1 mock：只实现 registerDirectEmby 用到的两条 SQL，INSERT 互斥语义与真实 D1 一致
+  function makeEmbyDb(rows: EmbyRow[]) {
+    const db = {
+      prepare(sql: string) {
+        let args: unknown[] = [];
+        const stmt = {
+          bind(...a: unknown[]) {
+            args = a;
+            return stmt;
+          },
+          async run() {
+            if (sql.startsWith("INSERT INTO embys")) {
+              const [name, backend_url, created_at] = args as string[];
+              if (rows.some((r) => r.name === name)) return { meta: { changes: 0 } };
+              rows.push({ name: name!, backend_url: backend_url!, created_at: created_at!, group_id: null });
+              return { meta: { changes: 1 } };
+            }
+            throw new Error("unexpected sql: " + sql);
+          },
+          async first() {
+            if (sql.startsWith("SELECT name, backend_url, group_id, created_at FROM embys WHERE backend_url")) {
+              return rows.find((r) => r.backend_url === args[0]) ?? null;
+            }
+            throw new Error("unexpected sql: " + sql);
+          },
+        };
+        return stmt;
+      },
+    } as unknown as D1Database;
+    return { db, rows };
+  }
+
+  function envOf(db: D1Database): Env {
+    return { EMBY_DB: db, ADMIN_TOKEN: "t", EMBY_SYNC_TOKEN: "t" };
+  }
+
+  const origin = "https://emby.example.com";
+
+  it("首次访问注册一条 d_<hash> 记录", async () => {
+    const { db, rows } = makeEmbyDb([]);
+    const rec = await registerDirectEmby(envOf(db), origin);
+    expect(rec?.name).toBe(await generateDirectEmbyName(origin, 0));
+    expect(rec?.backend_url).toBe(origin);
+    expect(rec?.group_id).toBeNull();
+    expect(rows).toHaveLength(1);
+  });
+
+  it("并发首访同一后端只落一条记录（撞名回查复用，不再插 -1 后缀）", async () => {
+    const { db, rows } = makeEmbyDb([]);
+    const [a, b] = await Promise.all([
+      registerDirectEmby(envOf(db), origin),
+      registerDirectEmby(envOf(db), origin),
+    ]);
+    const expected = await generateDirectEmbyName(origin, 0);
+    expect(rows).toHaveLength(1);
+    expect(a?.name).toBe(expected);
+    expect(b?.name).toBe(expected);
+  });
+
+  it("backend_url 已有记录（并发已写入）时按 origin 回查复用", async () => {
+    const existing = {
+      name: await generateDirectEmbyName(origin, 0),
+      backend_url: origin,
+      created_at: "t0",
+      group_id: 7,
+    };
+    const { db, rows } = makeEmbyDb([existing]);
+    const rec = await registerDirectEmby(envOf(db), origin);
+    expect(rec).toEqual(existing);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("name 被其它 origin 占用（真 hash 撞名）时才换 -1 后缀", async () => {
+    const taken = {
+      name: await generateDirectEmbyName(origin, 0),
+      backend_url: "https://other.example.com",
+      created_at: "t0",
+      group_id: null,
+    };
+    const { db, rows } = makeEmbyDb([taken]);
+    const rec = await registerDirectEmby(envOf(db), origin);
+    expect(rec?.name).toBe(await generateDirectEmbyName(origin, 1));
+    expect(rec?.backend_url).toBe(origin);
+    expect(rows).toHaveLength(2);
   });
 });
