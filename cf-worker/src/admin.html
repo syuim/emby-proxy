@@ -1228,7 +1228,7 @@
             const $name = tr.querySelector(".row-name");
             const $url = tr.querySelector(".row-url");
             const $weight = tr.querySelector(".row-weight");
-            tr.querySelector('[data-act="save"]').onclick = async () => {
+            tr.querySelector('[data-act="save"]').onclick = () => {
               const name = $name.value.trim();
               const url = $url.value.trim();
               if (!name || !url) { toast("名称与 public_url 不能为空", "err"); return; }
@@ -1239,15 +1239,20 @@
               const ispTags = Array.from(tr.querySelectorAll(".n-isp"))
                 .filter((x) => x.checked)
                 .map((x) => x.value);
-              try {
-                await api("/emby/admin/api/nodes/" + encodeURIComponent(id), {
-                  method: "PUT",
-                  body: JSON.stringify({ name, public_url: url, isp_tags: ispTags, weight }),
-                });
-                toast("已保存节点", "ok");
-                state.editingNode = null;
-                await refreshAll();
-              } catch (e) { toast(e.message, "err"); }
+              // 乐观更新：先按新值渲染并退出编辑态，PUT 转后台（改名/换 URL 会在 Worker 侧 fanout
+              // 推送所有节点，最长阻塞 10s，不能卡住页面）；失败再 refreshAll 回滚为服务端真值
+              const node = state.nodes.find((x) => x.id === id);
+              if (node) Object.assign(node, { name, public_url: url, isp_tags: ispTags, weight });
+              state.editingNode = null;
+              render();
+              api("/emby/admin/api/nodes/" + encodeURIComponent(id), {
+                method: "PUT",
+                body: JSON.stringify({ name, public_url: url, isp_tags: ispTags, weight }),
+              })
+                .then(() => toast("已保存节点", "ok"))
+                .catch((e) => toast("保存失败：" + e.message, "err"))
+                .then(() => refreshAll())
+                .catch(() => {});
             };
             tr.querySelector('[data-act="cancel"]').onclick = () => {
               state.editingNode = null;
