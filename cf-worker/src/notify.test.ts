@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import {
   buildNewIpMessage,
   notifyNewIp,
+  notifySkipReason,
   sendTelegramMessage,
   __resetNotifyStateForTests,
 } from "./notify";
@@ -15,10 +16,12 @@ beforeEach(() => {
   __resetNotifyStateForTests();
 });
 
-function makeReq(ip?: string, ua = "TestUA/1.0"): Request {
+function makeReq(ip?: string, ua = "TestUA/1.0", cf?: Record<string, unknown>): Request {
   const headers: Record<string, string> = { "User-Agent": ua };
   if (ip) headers["CF-Connecting-IP"] = ip;
-  return new Request("https://proxy.example.com/emby/main/Users/abc", { headers });
+  const req = new Request("https://proxy.example.com/emby/main/Users/abc", { headers });
+  if (cf) (req as unknown as { cf?: Record<string, unknown> }).cf = cf;
+  return req;
 }
 
 function collectCtx(): { ctx: ExecutionContext; tasks: Promise<unknown>[] } {
@@ -155,6 +158,24 @@ describe("sendTelegramMessage", () => {
   });
 });
 
+describe("notifySkipReason", () => {
+  it("淘宝/杭州阿里 AS37963 → taobao", () => {
+    expect(notifySkipReason({ isp: "ct", asn: 37963, city: "Hangzhou" })).toBe("taobao");
+  });
+
+  it("联通 + 杭州 → unicom-hangzhou（大小写/空白容错）", () => {
+    expect(notifySkipReason({ isp: "cu", asn: 4837, city: " Hangzhou " })).toBe(
+      "unicom-hangzhou",
+    );
+  });
+
+  it("联通非杭州 / 非联通杭州 / 缺城市 → 不忽略", () => {
+    expect(notifySkipReason({ isp: "cu", asn: 4837, city: "Shaoxing" })).toBeNull();
+    expect(notifySkipReason({ isp: "ct", asn: 4134, city: "Hangzhou" })).toBeNull();
+    expect(notifySkipReason({ isp: "cu", asn: 4837 })).toBeNull();
+  });
+});
+
 describe("notifyNewIp", () => {
   function mockOkFetch() {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
@@ -214,6 +235,58 @@ describe("notifyNewIp", () => {
     expect(calls.inserts).toBe(0);
     expect(calls.configReads).toBe(0);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("淘宝 ASN（37963）：写 seen_ips 但不播报", async () => {
+    const { env, calls } = stubEnv({ tgToken: "123:ABC", tgChat: "42" });
+    const fetchMock = mockOkFetch();
+    const { ctx, tasks } = collectCtx();
+    notifyNewIp(
+      makeReq("42.120.75.12", "Emby/4.8", { asn: 37963, city: "Hangzhou" }),
+      env,
+      ctx,
+      "emby=main",
+    );
+    await Promise.all(tasks);
+    expect(calls.inserts).toBe(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("杭州联通（AS4837 + Hangzhou）：写 seen_ips 但不播报", async () => {
+    const { env, calls } = stubEnv({ tgToken: "123:ABC", tgChat: "42" });
+    const fetchMock = mockOkFetch();
+    const { ctx, tasks } = collectCtx();
+    notifyNewIp(
+      makeReq("2408:8440:b418:e2c2::1", "Emby/4.8", {
+        asn: 4837,
+        asOrganization: "CHINA UNICOM China169 Backbone",
+        city: "Hangzhou",
+      }),
+      env,
+      ctx,
+      "emby=main",
+    );
+    await Promise.all(tasks);
+    expect(calls.inserts).toBe(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("联通非杭州（Shaoxing）：照常播报", async () => {
+    const { env } = stubEnv({ tgToken: "123:ABC", tgChat: "42" });
+    const fetchMock = mockOkFetch();
+    const { ctx, tasks } = collectCtx();
+    notifyNewIp(
+      makeReq("211.90.236.227", "Emby/4.8", {
+        asn: 4837,
+        asOrganization: "China United Telecommunications Corporation",
+        city: "Shaoxing",
+      }),
+      env,
+      ctx,
+      "emby=main",
+    );
+    await Promise.all(tasks);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("无 ctx（测试直调场景）：任务仍会执行且不抛", async () => {

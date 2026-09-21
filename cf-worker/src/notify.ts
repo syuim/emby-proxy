@@ -78,6 +78,25 @@ export function buildNewIpMessage(input: NewIpMessageInput): string {
   return clip(lines.join("\n"), 4000);
 }
 
+// 不播报的接入 IP：淘宝/阿里（AS37963，含 42.120.x 淘宝网络与 2401:b180 阿里云）
+// 与杭州联通（ASN 归联通且 CF 城市 Hangzhou）的动态 IP 反复触发，产品决策不通知；
+// 仍照常写入 seen_ips（只静默，不重发）。
+export type NotifySkipReason = "taobao" | "unicom-hangzhou";
+
+const TAOBAO_ASN = 37963;
+
+export function notifySkipReason(input: {
+  isp: IspClass;
+  asn?: number | null;
+  city?: string | null;
+}): NotifySkipReason | null {
+  if (input.asn === TAOBAO_ASN) return "taobao";
+  if (input.isp === "cu" && (input.city ?? "").trim().toLowerCase() === "hangzhou") {
+    return "unicom-hangzhou";
+  }
+  return null;
+}
+
 // ---------- 新 IP 检测（isolate 内缓存 + D1 去重） ----------
 // D1 是唯一真源：INSERT ON CONFLICT DO NOTHING 的 meta.changes 判「真新 IP」，
 // 跨 isolate 并发不会重复通知；isolate 内 Set 只用来免掉已记录 IP 的 D1 往返。
@@ -133,14 +152,21 @@ async function trackNewIp(request: Request, env: Env, target: string): Promise<v
   seenIpCache.add(ip);
   if (res.meta.changes === 0) return;
 
-  console.log(`[notify] new-ip ip=${ip} target=${target}`);
   const cf = (request as Request & { cf?: IncomingRequestCfProperties }).cf;
+  const isp = classifyClientIsp(request);
+  const skip = notifySkipReason({ isp, asn: cf?.asn, city: cf?.city });
+  if (skip) {
+    console.log(`[notify] new-ip ip=${ip} target=${target} skip=${skip}`);
+    return;
+  }
+
+  console.log(`[notify] new-ip ip=${ip} target=${target}`);
   const text = buildNewIpMessage({
     ip,
     target,
     method: request.method,
     path: new URL(request.url).pathname,
-    isp: classifyClientIsp(request),
+    isp,
     asn: cf?.asn,
     asOrganization: cf?.asOrganization,
     country: cf?.country,

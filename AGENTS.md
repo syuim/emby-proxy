@@ -129,6 +129,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 - 未配置 TG 时不落库不缓存（配置前的访问在配置后仍会被通知）；TG 配置读取带 60s isolate TTL 缓存（懒传播，值仍以 D1 为准）。
 - 整条链路（D1 写入 + TG 发送）在 `ctx.waitUntil` 内执行，不占客户端请求延迟；TG 发送失败只记日志（`[notify] new-ip ... tg=failed`），不影响客户端响应。
 - 消息纯文本（不用 Markdown，避免 UA/路径里的 `_` 触发 TG 400），含 IP / 运营商归类 / ASN 组织 / 国家城市 / 目标 / 方法+pathname（不含 query）/ UA / 时间，均截断，总长 ≤4000。
+- 忽略名单（`notifySkipReason`）：AS37963（淘宝/杭州阿里）与「联通 + CF 城市 Hangzhou」的 IP 只写 `seen_ips` 不播报（日志 `[notify] new-ip ... skip=taobao|unicom-hangzhou`），避免动态 IP 反复刷屏。
 
 ## Required Environment Variables
 
