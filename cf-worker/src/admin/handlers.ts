@@ -285,10 +285,11 @@ export async function handleDeleteNode(env: Env, id: string): Promise<Response> 
   if (!nodes.nodes.some((n) => n.id === id)) {
     return json(404, { error: "节点不存在" });
   }
-  // 只清组关联与节点记录；embys.node_id/home_node_id 解引用已随全局节点机制移除，
-  // health 残留行由 cron 的 staleIds 清理
+  // 只清组关联、指定节点引用与节点记录；health 残留行由 cron 的 staleIds 清理。
+  // 禁用节点不清 pinned_node_id（探活回落、恢复后自动生效）
   await env.EMBY_DB.batch([
     env.EMBY_DB.prepare("DELETE FROM node_groups WHERE node_id = ?").bind(id),
+    env.EMBY_DB.prepare("UPDATE embys SET pinned_node_id = NULL WHERE pinned_node_id = ?").bind(id),
     env.EMBY_DB.prepare("DELETE FROM nodes WHERE id = ?").bind(id),
   ]);
   return json(200, { ok: true });
@@ -301,7 +302,7 @@ export async function handleListEmbys(env: Env): Promise<Response> {
 
 export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Response> {
   const { name, backend_url } = req.body ?? {};
-  const trimmed: Omit<EmbyRecord, "created_at" | "group_id"> = {
+  const trimmed: Omit<EmbyRecord, "created_at" | "group_id" | "pinned_node_id"> = {
     name: typeof name === "string" ? name.trim() : "",
     backend_url:
       typeof backend_url === "string" ? normalizeUrl(backend_url) : "",
@@ -319,15 +320,28 @@ export async function handleAddEmby(req: JsonRequest, env: Env): Promise<Respons
     groupId = gid;
   }
 
+  // 未传 pinned_node_id = 默认不指定；显式传了才校验存在性
+  let pinnedNodeId: string | null = null;
+  if (req.body?.pinned_node_id !== undefined) {
+    const pid = validatePinnedNodeInput(req.body.pinned_node_id, nodes);
+    if (pid === undefined) return json(400, { error: "pinned_node_id 不存在" });
+    pinnedNodeId = pid;
+  }
+
   if (embys.embys.some((e) => e.name === trimmed.name)) {
     return json(400, { error: `emby '${trimmed.name}' 已存在` });
   }
-  const record: EmbyRecord = { ...trimmed, group_id: groupId, created_at: new Date().toISOString() };
+  const record: EmbyRecord = {
+    ...trimmed,
+    group_id: groupId,
+    pinned_node_id: pinnedNodeId,
+    created_at: new Date().toISOString(),
+  };
   // 定向 INSERT + version 原子递增，避免整表 DELETE + 重插的并发丢数据
   await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(
-      "INSERT INTO embys(name, backend_url, group_id, created_at) VALUES(?,?,?,?)",
-    ).bind(record.name, record.backend_url, record.group_id, record.created_at),
+      "INSERT INTO embys(name, backend_url, group_id, pinned_node_id, created_at) VALUES(?,?,?,?,?)",
+    ).bind(record.name, record.backend_url, record.group_id, record.pinned_node_id, record.created_at),
     env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
   ]);
   embys.version += 1;
@@ -372,23 +386,31 @@ export async function handleUpdateEmby(
       changed = true;
     }
   }
+  if (req.body?.pinned_node_id !== undefined) {
+    const pinnedId = validatePinnedNodeInput(req.body.pinned_node_id, nodes);
+    if (pinnedId === undefined) return json(400, { error: "pinned_node_id 不存在" });
+    if (pinnedId !== emby.pinned_node_id) {
+      emby.pinned_node_id = pinnedId;
+      changed = true;
+    }
+  }
   const err = validateEmby(emby);
   if (err) return json(400, { error: err });
 
   if (!changed) return json(200, { ok: true, emby, skipped: true });
   // 定向 UPDATE（含重命名）+ version 原子递增。
-  // group_id 只影响 Worker 路由（不进节点 snapshot），变更仍 bump version 无副作用但
-  // 会产生一次无谓 fanout；为保持 fanout 只在内容变化时发生，group 变化单独走 UPDATE。
+  // group_id / pinned_node_id 只影响 Worker 路由（不进节点 snapshot），变更仍 bump version
+  // 无副作用但会产生一次无谓 fanout；为保持 fanout 只在内容变化时发生，路由字段单独走 UPDATE。
   if (changed && !bodyHasContentChange(req.body)) {
     await env.EMBY_DB.prepare(
-      "UPDATE embys SET group_id = ? WHERE name = ?",
-    ).bind(emby.group_id, name).run();
+      "UPDATE embys SET group_id = ?, pinned_node_id = ? WHERE name = ?",
+    ).bind(emby.group_id, emby.pinned_node_id, name).run();
     return json(200, { ok: true, emby, group_updated: true });
   }
   // 定向 UPDATE（含重命名）+ version 原子递增
   await env.EMBY_DB.batch([
-    env.EMBY_DB.prepare("UPDATE embys SET name = ?, backend_url = ?, group_id = ? WHERE name = ?").bind(
-      emby.name, emby.backend_url, emby.group_id, name,
+    env.EMBY_DB.prepare("UPDATE embys SET name = ?, backend_url = ?, group_id = ?, pinned_node_id = ? WHERE name = ?").bind(
+      emby.name, emby.backend_url, emby.group_id, emby.pinned_node_id, name,
     ),
     env.EMBY_DB.prepare("UPDATE config_meta SET version = version + 1 WHERE id = 1"),
   ]);
@@ -413,7 +435,19 @@ async function validateGroupIdInput(
   return undefined;
 }
 
-// true = 请求体只改了 group_id（不走 fanout / bump version）
+// pinned_node_id 输入校验：null / 空串（清除）、合法节点 id。返回 undefined 表示非法。
+// 允许指定禁用节点：运行时探活视为不可达自动回落，恢复启用后自动生效
+function validatePinnedNodeInput(
+  v: unknown,
+  nodes: NodesKV,
+): string | null | undefined {
+  if (v === null || v === "") return null;
+  if (typeof v === "string" && nodes.nodes.some((n) => n.id === v)) return v;
+  return undefined;
+}
+
+// true = 请求体含 name/backend_url（内容变更，走 fanout）；
+// false = 纯路由字段变更（group_id / pinned_node_id），不 bump version、不 fanout
 function bodyHasContentChange(body: any): boolean {
   return (
     (typeof body?.name === "string" && body.name.trim() !== "") ||
@@ -709,7 +743,7 @@ function validatePublicUrl(u: string): string | null {
   return null;
 }
 
-function validateEmby(e: Omit<EmbyRecord, "created_at" | "group_id">): string | null {
+function validateEmby(e: Omit<EmbyRecord, "created_at" | "group_id" | "pinned_node_id">): string | null {
   if (!EMBY_NAME_RE.test(e.name)) {
     return "emby 名只能包含字母/数字/_/-，长度 1-32";
   }

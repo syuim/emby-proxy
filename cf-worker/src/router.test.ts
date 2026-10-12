@@ -193,6 +193,7 @@ describe("registerDirectEmby", () => {
     backend_url: string;
     created_at: string;
     group_id: number | null;
+    pinned_node_id: string | null;
   }
 
   // 极简 D1 mock：只实现 registerDirectEmby 用到的两条 SQL，INSERT 互斥语义与真实 D1 一致
@@ -209,13 +210,13 @@ describe("registerDirectEmby", () => {
             if (sql.startsWith("INSERT INTO embys")) {
               const [name, backend_url, created_at] = args as string[];
               if (rows.some((r) => r.name === name)) return { meta: { changes: 0 } };
-              rows.push({ name: name!, backend_url: backend_url!, created_at: created_at!, group_id: null });
+              rows.push({ name: name!, backend_url: backend_url!, created_at: created_at!, group_id: null, pinned_node_id: null });
               return { meta: { changes: 1 } };
             }
             throw new Error("unexpected sql: " + sql);
           },
           async first() {
-            if (sql.startsWith("SELECT name, backend_url, group_id, created_at FROM embys WHERE backend_url")) {
+            if (sql.startsWith("SELECT name, backend_url, group_id, pinned_node_id, created_at FROM embys WHERE backend_url")) {
               return rows.find((r) => r.backend_url === args[0]) ?? null;
             }
             throw new Error("unexpected sql: " + sql);
@@ -239,6 +240,7 @@ describe("registerDirectEmby", () => {
     expect(rec?.name).toBe(await generateDirectEmbyName(origin, 0));
     expect(rec?.backend_url).toBe(origin);
     expect(rec?.group_id).toBeNull();
+    expect(rec?.pinned_node_id).toBeNull();
     expect(rows).toHaveLength(1);
   });
 
@@ -260,6 +262,7 @@ describe("registerDirectEmby", () => {
       backend_url: origin,
       created_at: "t0",
       group_id: 7,
+      pinned_node_id: "n7",
     };
     const { db, rows } = makeEmbyDb([existing]);
     const rec = await registerDirectEmby(envOf(db), origin);
@@ -273,6 +276,7 @@ describe("registerDirectEmby", () => {
       backend_url: "https://other.example.com",
       created_at: "t0",
       group_id: null,
+      pinned_node_id: null,
     };
     const { db, rows } = makeEmbyDb([taken]);
     const rec = await registerDirectEmby(envOf(db), origin);

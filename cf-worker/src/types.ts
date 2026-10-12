@@ -34,6 +34,9 @@ export interface EmbyRecord {
   created_at: string;
   // 绑定的代理组；null = 未绑定（node 模式下直接 Worker local）
   group_id: number | null;
+  // 指定节点 id；null = 未指定。node 模式下优先于代理组与 overseas 直连判定，
+  // 节点探活不可用（挂/禁用）时回落现有逻辑。仅 Worker 路由使用，不进 sync 协议
+  pinned_node_id: string | null;
 }
 
 export interface EmbysKV {

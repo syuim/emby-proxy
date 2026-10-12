@@ -595,7 +595,9 @@
 
         .table-wrap { border-radius: var(--radius-sm); }
         .table-wrap-embys:not(.editing) th:nth-child(3),
-        .table-wrap-embys:not(.editing) td:nth-child(3) { display: none; }
+        .table-wrap-embys:not(.editing) td:nth-child(3),
+        .table-wrap-embys:not(.editing) th:nth-child(4),
+        .table-wrap-embys:not(.editing) td:nth-child(4) { display: none; }
         .table-wrap-nodes th:nth-child(6),
         .table-wrap-nodes td:nth-child(6) { display: none; }
 
@@ -987,7 +989,7 @@
               ? '<div class="empty"><div class="empty-icon">📭</div>还没有 emby 配置</div>'
               : `<div class="table-wrap table-wrap-embys ${state.editingEmby ? "editing" : ""}"><table>
                   <thead><tr>
-                    <th>名称</th><th>后端</th><th>代理组</th><th class="col-actions">操作</th>
+                    <th>名称</th><th>后端</th><th>代理组</th><th>指定节点</th><th class="col-actions">操作</th>
                   </tr></thead>
                   <tbody>
                     ${paged.map((e) => {
@@ -1005,6 +1007,14 @@
                                 ).join("")}
                               </select>
                             </td>
+                            <td>
+                              <select class="row-pinned" title="node 模式下直接使用该节点（优先于代理组），探活不可用时自动回落">
+                                <option value="">不指定</option>
+                                ${state.nodes.map((n) =>
+                                  `<option value="${n.id}" ${e.pinned_node_id === n.id ? "selected" : ""}>${escapeHtml(n.name)}${n.disabled ? "（已禁用）" : ""}</option>`
+                                ).join("")}
+                              </select>
+                            </td>
                             <td class="actions">
                               <button class="btn btn-primary" data-act="save">保存</button>
                               <button class="btn btn-ghost" data-act="cancel">取消</button>
@@ -1014,6 +1024,10 @@
                       }
                       const gid = e.group_id;
                       const gname = groupName(gid);
+                      const pinnedNode = e.pinned_node_id ? state.nodes.find((x) => x.id === e.pinned_node_id) : null;
+                      const pinnedCell = e.pinned_node_id
+                        ? `<span class="badge" style="${ISP_CHIP_STYLE}" title="node 模式下直接使用该节点（优先于代理组），不可用时自动回落">${escapeHtml(pinnedNode ? pinnedNode.name : e.pinned_node_id)}${pinnedNode && pinnedNode.disabled ? "（已禁用）" : ""}</span>`
+                        : '<span class="badge unknown">未指定</span>';
                       // douban 系统保留：不提供编辑/删除入口，行尾显示锁定标识
                       const locked = e.name === DOUBAN_EMBY_NAME;
                       const actionsCell = locked
@@ -1025,6 +1039,7 @@
                           <td><strong>${escapeHtml(e.name)}</strong></td>
                           <td class="mono">${escapeHtml(e.backend_url)}</td>
                           <td>${gname ? `<span class="badge" style="border:1px solid var(--color-border-strong);background:var(--color-surface);color:var(--color-text);">${escapeHtml(gname)}</span>` : '<span class="badge unknown">未绑定</span>'}</td>
+                          <td>${pinnedCell}</td>
                           <td class="actions">${actionsCell}</td>
                         </tr>
                       `;
@@ -1078,10 +1093,12 @@
               if (!newBackend) { toast("backend_url 不能为空", "err"); return; }
               const $group = tr.querySelector(".row-group");
               const groupId = $group && $group.value !== "" ? Number($group.value) : null;
+              const $pinned = tr.querySelector(".row-pinned");
+              const pinnedId = $pinned && $pinned.value !== "" ? $pinned.value : null;
               try {
                 await api("/emby/admin/api/embys/" + encodeURIComponent(name), {
                   method: "PUT",
-                  body: JSON.stringify({ name: newName, backend_url: newBackend, group_id: groupId }),
+                  body: JSON.stringify({ name: newName, backend_url: newBackend, group_id: groupId, pinned_node_id: pinnedId }),
                 });
                 toast(`已保存并推送：${newName}`, "ok");
                 state.editingEmby = null;
@@ -1512,6 +1529,13 @@
                     ${state.groups.map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join("")}
                   </select>
                 </div>
+                <div class="field">
+                  <label>指定节点 <span class="hint">可留空；指定后 node 模式直接使用该节点（优先于代理组），不可用时自动回落</span></label>
+                  <select id="e-pinned">
+                    <option value="">不指定</option>
+                    ${state.nodes.map((n) => `<option value="${n.id}">${escapeHtml(n.name)}${n.disabled ? "（已禁用）" : ""}</option>`).join("")}
+                  </select>
+                </div>
                 <p class="hint" style="margin:0;">
                   URL: <span class="mono">https://入口域名/&lt;emby_name&gt;/...</span> →
                   代理模式由顶部全局设置决定（Node 组路由 / Worker 代理 / 直连）
@@ -1530,8 +1554,10 @@
           const backend = root.querySelector("#e-backend").value.trim();
           const $group = root.querySelector("#e-group");
           const groupId = $group && $group.value !== "" ? Number($group.value) : null;
+          const $pinned = root.querySelector("#e-pinned");
+          const pinnedId = $pinned && $pinned.value !== "" ? $pinned.value : null;
           try {
-            await api("/emby/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, group_id: groupId }) });
+            await api("/emby/admin/api/embys", { method: "POST", body: JSON.stringify({ name, backend_url: backend, group_id: groupId, pinned_node_id: pinnedId }) });
             toast("已添加并推送到所有节点", "ok");
             closeModal();
             await refreshAll();

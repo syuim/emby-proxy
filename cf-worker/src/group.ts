@@ -1,7 +1,7 @@
 import { probeAlive } from "./alive";
 import { classifyIsp, type IspClass } from "./isp";
 import { readGroupNodeIds } from "./storage";
-import type { Env, NodeRecord } from "./types";
+import type { EmbyRecord, Env, NodeRecord } from "./types";
 
 // 从 CF 请求属性取入口网络：asn 命中本地表；未命中用组织名二次兜底
 export function classifyClientIsp(request: Request): IspClass {
@@ -40,6 +40,18 @@ export function pickWeighted(pool: NodeRecord[]): NodeRecord {
     if (r < 0) return n;
   }
   return pool[pool.length - 1]!;
+}
+
+// 指定节点解析：pin 命中且探活通过（禁用 = 不可达）→ 该节点；
+// 未指定 / 节点已删 / 不可用 → null（由调用方回落现有逻辑）
+export async function resolvePinnedNode(
+  emby: EmbyRecord,
+  nodes: NodeRecord[],
+): Promise<NodeRecord | null> {
+  if (!emby.pinned_node_id) return null;
+  const node = nodes.find((n) => n.id === emby.pinned_node_id);
+  if (!node) return null;
+  return (await probeAlive(node)) ? node : null;
 }
 
 /**
