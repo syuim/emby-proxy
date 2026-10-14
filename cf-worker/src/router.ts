@@ -1,7 +1,7 @@
 import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_EMBY_NAME, TMDB_BASE_PATH, URL_BASE_PATH, STATIC_ASSET_CACHE_TTL, normalizeUrl } from "./constants";
 import { handleUrlRequest } from "./urlproxy";
 import { readConfigMeta, readEmbys, readNodes } from "./storage";
-import { chooseNodeFromGroup, classifyClientIsp, resolvePinnedNode } from "./group";
+import { chooseNodeFromGroup, classifyClientIsp } from "./group";
 import { notifyNewIp } from "./notify";
 import type { EmbyRecord, Env } from "./types";
 
@@ -67,25 +67,6 @@ async function routeNameAccess(
     case "local":
       console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=local`);
       return proxyLocal(request, target, emby.name, emby.backend_url);
-  }
-
-  // node 模式：指定节点优先于代理组与 overseas 直连判定（任何入口都走 pin）；
-  // 节点不可用（挂/禁用，probeAlive 判定）时回落下方现有逻辑
-  if (emby.pinned_node_id) {
-    const pinned = await resolvePinnedNode(emby, nodesKV.nodes);
-    if (pinned) {
-      console.log(
-        `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=pinned node=${pinned.name}`,
-      );
-      const nodeTarget = buildTargetUrl(pinned.public_url, "/" + emby.name + subpath, url.search);
-      return new Response(null, {
-        status: 307,
-        headers: { Location: nodeTarget, "Cache-Control": "no-store" },
-      });
-    }
-    console.log(
-      `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=pinned-fallback reason=unavailable pin=${emby.pinned_node_id}`,
-    );
   }
 
   // case 'node': emby 绑定代理组 → 组内按入口网络过滤后轮询；未绑组走下方 Worker local
@@ -477,19 +458,18 @@ export async function registerDirectEmby(
       "INSERT INTO embys(name, backend_url, created_at) VALUES(?,?,?) ON CONFLICT(name) DO NOTHING",
     ).bind(name, backendOrigin, createdAt).run();
     if (res.meta.changes > 0) {
-      return { name, backend_url: backendOrigin, group_id: null, pinned_node_id: null, created_at: createdAt };
+      return { name, backend_url: backendOrigin, group_id: null, created_at: createdAt };
     }
     const existing = await env.EMBY_DB.prepare(
-      "SELECT name, backend_url, group_id, pinned_node_id, created_at FROM embys WHERE backend_url = ? LIMIT 1",
+      "SELECT name, backend_url, group_id, created_at FROM embys WHERE backend_url = ? LIMIT 1",
     )
       .bind(backendOrigin)
-      .first<{ name: string; backend_url: string; group_id: number | null; pinned_node_id: string | null; created_at: string }>();
+      .first<{ name: string; backend_url: string; group_id: number | null; created_at: string }>();
     if (existing) {
       return {
         name: existing.name,
         backend_url: existing.backend_url,
         group_id: existing.group_id ?? null,
-        pinned_node_id: existing.pinned_node_id ?? null,
         created_at: existing.created_at,
       };
     }

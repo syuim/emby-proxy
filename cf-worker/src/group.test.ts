@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { __resetAliveCacheForTests } from "./alive";
-import { chooseNodeFromGroup, matchIspPool, pickWeighted, resolvePinnedNode } from "./group";
-import type { EmbyRecord, Env, NodeRecord } from "./types";
+import { chooseNodeFromGroup, matchIspPool, pickWeighted } from "./group";
+import type { Env, NodeRecord } from "./types";
 
 function makeNode(id: string, ispTags: string[] = [], disabled = false, weight = 1): NodeRecord {
   return {
@@ -310,49 +310,5 @@ describe("chooseNodeFromGroup", () => {
       expect(pick!.node.id).toBe("n-main");
       expect(pick!.stage).toBe("primary");
     }
-  });
-});
-
-function makeEmby(pinned: string | null): EmbyRecord {
-  return {
-    name: "e1",
-    backend_url: "https://emby.example.com",
-    created_at: "2026-01-01T00:00:00Z",
-    group_id: null,
-    pinned_node_id: pinned,
-  };
-}
-
-describe("resolvePinnedNode", () => {
-  const nodes = [
-    makeNode("n1"),
-    makeNode("n-dead"),
-    makeNode("n-disabled", [], true),
-  ];
-
-  it("未指定 → null", async () => {
-    mockNodeHealth(new Set(["n1"]));
-    expect(await resolvePinnedNode(makeEmby(null), nodes)).toBeNull();
-  });
-
-  it("指定且探活通过 → 该节点", async () => {
-    mockNodeHealth(new Set(["n1"]));
-    const n = await resolvePinnedNode(makeEmby("n1"), nodes);
-    expect(n?.id).toBe("n1");
-  });
-
-  it("指定节点已挂 → null（回落现有逻辑）", async () => {
-    mockNodeHealth(new Set(["n1"]));
-    expect(await resolvePinnedNode(makeEmby("n-dead"), nodes)).toBeNull();
-  });
-
-  it("指定节点被禁用 → null（禁用 = 不可达，即使服务在线）", async () => {
-    mockNodeHealth(new Set(["n-disabled"]));
-    expect(await resolvePinnedNode(makeEmby("n-disabled"), nodes)).toBeNull();
-  });
-
-  it("指定 id 已不在 nodes 列表（已删）→ null", async () => {
-    mockNodeHealth(new Set(["n1"]));
-    expect(await resolvePinnedNode(makeEmby("n-ghost"), nodes)).toBeNull();
   });
 });

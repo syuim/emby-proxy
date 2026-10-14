@@ -82,7 +82,7 @@ export async function readTgConfig(
 export async function readEmbys(env: Env): Promise<EmbysKV> {
   const [embysRes, verRes] = await env.EMBY_DB.batch([
     env.EMBY_DB.prepare(
-      "SELECT name, backend_url, group_id, pinned_node_id, created_at FROM embys ORDER BY name",
+      "SELECT name, backend_url, group_id, created_at FROM embys ORDER BY name",
     ),
     env.EMBY_DB.prepare("SELECT version FROM config_meta WHERE id = 1"),
   ]);
@@ -97,7 +97,6 @@ export async function readEmbys(env: Env): Promise<EmbysKV> {
       name: r.name,
       backend_url: r.backend_url,
       group_id: r.group_id ?? null,
-      pinned_node_id: r.pinned_node_id ?? null,
       created_at: r.created_at,
     })),
   };

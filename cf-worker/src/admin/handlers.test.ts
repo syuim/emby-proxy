@@ -1,9 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  handleAddEmby,
   handleCreateGroup,
   handleDeleteNode,
-  handleUpdateEmby,
   handleUpdateGroup,
   handleUpdateNode,
 } from "./handlers";
@@ -13,7 +11,6 @@ type Stmt = { sql: string; args: unknown[] };
 type FakeStmt = Stmt & {
   bind: (...args: unknown[]) => FakeStmt;
   all: () => Promise<unknown>;
-  run: () => Promise<unknown>;
 };
 
 type NodeRow = {
@@ -38,37 +35,17 @@ function node(id: string, name: string, disabled = false): NodeRow {
   };
 }
 
-type EmbyRow = {
-  name: string;
-  backend_url: string;
-  created_at: string;
-  group_id: number | null;
-  pinned_node_id: string | null;
-};
-
-function emby(name: string, pinned: string | null, groupId: number | null = null): EmbyRow {
-  return {
-    name,
-    backend_url: `http://${name}.example.com`,
-    created_at: "2026-01-01T00:00:00.000Z",
-    group_id: groupId,
-    pinned_node_id: pinned,
-  };
-}
-
 // 假 D1：SELECT 按表返回预置数据；写语句统一收集到 writes（不落库，也不做真实事务）
 function stubEnv(opts: {
   nodes?: NodeRow[];
   groups?: { id: number; name: string; created_at: string }[];
   members?: { group_id: number; node_id: string; is_backup: number }[];
-  embys?: EmbyRow[];
 } = {}) {
   const writes: Stmt[] = [];
   const selectResults = (sql: string) => {
     if (sql.includes("FROM nodes")) return opts.nodes ?? [];
     if (sql.includes("FROM proxy_groups")) return opts.groups ?? [];
     if (sql.includes("FROM node_groups")) return opts.members ?? [];
-    if (sql.includes("FROM embys")) return opts.embys ?? [];
     return [];
   };
   const db = {
@@ -81,10 +58,6 @@ function stubEnv(opts: {
           return stmt;
         },
         all: async () => ({ success: true, results: selectResults(sql) }),
-        run: async () => {
-          writes.push({ sql, args: stmt.args });
-          return { success: true, meta: { changes: 1 } };
-        },
       };
       return stmt;
     },
@@ -173,91 +146,5 @@ describe("代理组成员维护", () => {
     expect(res.status).toBe(200);
     expect(has(writes, "DELETE FROM node_groups WHERE node_id")).toBe(true);
     expect(has(writes, "DELETE FROM nodes")).toBe(true);
-  });
-});
-
-describe("emby 指定节点（pinned_node_id）", () => {
-  it("添加时指定不存在节点 → 400 且无写入", async () => {
-    const { env, writes } = stubEnv({ nodes: [node("n1", "dash")] });
-    const res = await handleAddEmby(
-      req({ name: "e1", backend_url: "http://b.example.com", pinned_node_id: "n9" }),
-      env,
-    );
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("pinned_node_id");
-    expect(writes).toHaveLength(0);
-  });
-
-  it("添加时指定合法节点 → INSERT 含 pinned_node_id", async () => {
-    // 节点全禁用 → fanoutPush 跳过（避免测试触发真实 fetch）
-    const { env, writes } = stubEnv({ nodes: [node("n1", "dash", true)] });
-    const res = await handleAddEmby(
-      req({ name: "e1", backend_url: "http://b.example.com", pinned_node_id: "n1" }),
-      env,
-    );
-    expect(res.status).toBe(201);
-    const ins = writes.find((w) => w.sql.startsWith("INSERT INTO embys"));
-    expect(ins?.sql).toContain("pinned_node_id");
-    expect(ins?.args[3]).toBe("n1");
-    expect(has(writes, "UPDATE config_meta SET version")).toBe(true);
-  });
-
-  it("仅改指定节点 → 路由定向 UPDATE，不 bump version、不 fanout", async () => {
-    const { env, writes } = stubEnv({
-      nodes: [node("n1", "dash")],
-      embys: [emby("e1", null)],
-    });
-    const res = await handleUpdateEmby(req({ pinned_node_id: "n1" }), env, "e1");
-    expect(res.status).toBe(200);
-    const upd = writes.find((w) => w.sql.startsWith("UPDATE embys SET group_id"));
-    expect(upd?.args).toEqual([null, "n1", "e1"]);
-    expect(has(writes, "UPDATE config_meta")).toBe(false);
-  });
-
-  it("清除指定节点 → 写 NULL", async () => {
-    const { env, writes } = stubEnv({
-      nodes: [node("n1", "dash")],
-      embys: [emby("e1", "n1")],
-    });
-    const res = await handleUpdateEmby(req({ pinned_node_id: null }), env, "e1");
-    expect(res.status).toBe(200);
-    const upd = writes.find((w) => w.sql.startsWith("UPDATE embys SET group_id"));
-    expect(upd?.args).toEqual([null, null, "e1"]);
-  });
-
-  it("指定已禁用节点可保存（运行时回落、启用后自动生效）", async () => {
-    const { env, writes } = stubEnv({
-      nodes: [node("n2", "hk", true)],
-      embys: [emby("e1", null)],
-    });
-    const res = await handleUpdateEmby(req({ pinned_node_id: "n2" }), env, "e1");
-    expect(res.status).toBe(200);
-    const upd = writes.find((w) => w.sql.startsWith("UPDATE embys SET group_id"));
-    expect(upd?.args).toEqual([null, "n2", "e1"]);
-  });
-
-  it("内容变更时 pinned_node_id 一并写入并 bump version", async () => {
-    const { env, writes } = stubEnv({
-      nodes: [node("n1", "dash", true)],
-      embys: [emby("e1", null)],
-    });
-    const res = await handleUpdateEmby(
-      req({ backend_url: "http://new.example.com", pinned_node_id: "n1" }),
-      env,
-      "e1",
-    );
-    expect(res.status).toBe(200);
-    const upd = writes.find((w) => w.sql.startsWith("UPDATE embys SET name"));
-    expect(upd?.args).toEqual(["e1", "http://new.example.com", null, "n1", "e1"]);
-    expect(has(writes, "UPDATE config_meta SET version")).toBe(true);
-  });
-
-  it("删除节点时清空 embys 指定引用", async () => {
-    const { env, writes } = stubEnv({ nodes: [node("n1", "dash")] });
-    const res = await handleDeleteNode(env, "n1");
-    expect(res.status).toBe(200);
-    const clear = writes.find((w) => w.sql.startsWith("UPDATE embys SET pinned_node_id = NULL"));
-    expect(clear?.args).toEqual(["n1"]);
   });
 });
