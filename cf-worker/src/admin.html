@@ -1101,7 +1101,7 @@
       }
 
       // ---------- 节点列表面板（嵌在代理组页下方，按代理组分类展示） ----------
-      function nodeRowHtml(n, role) {
+      function nodeRowHtml(n) {
         const h = state.health[n.id] || {};
         const editing = state.editingNode === n.id;
         if (editing) {
@@ -1126,13 +1126,10 @@
             </tr>
           `;
         }
-        const backupBadge = role === "backup"
-          ? `<span class="badge" style="${ISP_CHIP_STYLE};border-style:dashed;opacity:.75;" title="备用节点（主成员全部失效时才启用）">备</span>`
-          : "";
         return `
           <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
             <td><div class="stack-name">
-              <span style="display:inline-flex;align-items:center;gap:6px;"><strong>${escapeHtml(n.name)}</strong>${backupBadge}</span>
+              <strong>${escapeHtml(n.name)}</strong>
             </div></td>
             <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
             <td>${ispBadges(n.isp_tags)}</td>
@@ -1148,7 +1145,7 @@
         `;
       }
 
-      function nodeTableHtml(rows) {
+      function nodeTableHtml(nodes) {
         return `<div class="table-wrap table-wrap-nodes"><table>
             <thead><tr>
               <th>节点</th>
@@ -1159,39 +1156,32 @@
               <th>最近检测</th>
               <th class="col-actions">操作</th>
             </tr></thead>
-            <tbody>${rows.map((r) => nodeRowHtml(r.n, r.role)).join("")}</tbody>
+            <tbody>${nodes.map((n) => nodeRowHtml(n)).join("")}</tbody>
           </table></div>`;
       }
 
       function nodePanelHtml() {
-        // 按代理组分类：节点属于多个组时在各组分区中都会出现；不属于任何组的归入「未分配」
-        const assigned = new Set();
-        state.groups.forEach((g) => {
-          (g.node_ids || []).forEach((id) => assigned.add(id));
-          (g.backup_node_ids || []).forEach((id) => assigned.add(id));
-        });
-        const unassigned = state.nodes.filter((n) => !assigned.has(n.id));
-
+        // 按代理组分类（组分区仅展示主成员，备用关系在代理组列表查看）：
+        // 未被任何组作为主成员的节点（不在任何组 / 仅作备用）归入「未分配」，保证管理入口不丢失
+        const shown = new Set();
         const sections = [];
         state.groups.forEach((g) => {
           const memberIds = new Set(g.node_ids || []);
-          const backupIds = new Set(g.backup_node_ids || []);
-          const rows = state.nodes
-            .filter((n) => memberIds.has(n.id) || backupIds.has(n.id))
-            .map((n) => ({ n, role: backupIds.has(n.id) ? "backup" : "member" }));
+          const rows = state.nodes.filter((n) => memberIds.has(n.id));
+          rows.forEach((n) => shown.add(n.id));
           if (rows.length === 0) return;
-          const mainCount = rows.filter((r) => r.role !== "backup").length;
           sections.push(`
             <div class="node-section">
-              <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">主 ${mainCount} · 备 ${rows.length - mainCount}</span></div>
+              <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">${rows.length} 个节点</span></div>
               ${nodeTableHtml(rows)}
             </div>`);
         });
+        const unassigned = state.nodes.filter((n) => !shown.has(n.id));
         if (unassigned.length > 0) {
           sections.push(`
             <div class="node-section">
-              <div class="node-section-head"><strong style="color:var(--color-text-muted);">未分配</strong><span class="hint">${unassigned.length} 个节点不在任何代理组</span></div>
-              ${nodeTableHtml(unassigned.map((n) => ({ n, role: null })))}
+              <div class="node-section-head"><strong style="color:var(--color-text-muted);">未分配</strong><span class="hint">${unassigned.length} 个节点</span></div>
+              ${nodeTableHtml(unassigned)}
             </div>`);
         }
 
@@ -1203,7 +1193,7 @@
               <button class="btn btn-ghost" id="h-sync"><span class="hide-sm">↑ 重推所有节点</span><span class="only-sm">↑ 重推</span></button>
               <button class="btn btn-primary" id="n-add">+ 节点</button>
             </div>
-            <p class="hint" style="margin:-6px 0 14px;">按代理组分类展示；组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
+            <p class="hint" style="margin:-6px 0 14px;">按代理组分类展示（仅主成员，备用关系见代理组列表）；组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
             ${state.nodes.length === 0
               ? '<div class="empty"><div class="empty-icon">🖧</div>还没有节点</div>'
               : sections.join("")}
