@@ -503,6 +503,10 @@
       .gm-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
       /* 节点行内编辑的 ISP 复选框容器：flex 换行；min-width 防止表格把该列压得过窄 */
       .n-isp-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; min-width: 148px; }
+      /* 节点列表按代理组分类的分区（分组头 + 组内节点表） */
+      .node-section + .node-section { margin-top: 16px; }
+      .node-section-head { display: flex; align-items: baseline; gap: 8px; margin: 0 2px 6px; }
+      .node-section-head strong { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
 
       /* ============ Responsive ============ */
       @media (max-width: 768px) {
@@ -684,7 +688,7 @@
       const DOUBAN_EMBY_NAME = "douban";
       const MODE_LABELS = { node: "Node（组路由）", local: "Worker 代理", direct: "直连" };
       const $app = document.getElementById("app");
-      const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups", "config"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", tgBotToken: "", tgChatId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, nodePage: 0, diag: null };
+      const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups", "config"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", tgBotToken: "", tgChatId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, diag: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -1096,13 +1100,101 @@
         });
       }
 
-      // ---------- 节点列表面板（嵌在代理组页下方） ----------
+      // ---------- 节点列表面板（嵌在代理组页下方，按代理组分类展示） ----------
+      function nodeRowHtml(n, role) {
+        const h = state.health[n.id] || {};
+        const editing = state.editingNode === n.id;
+        if (editing) {
+          return `
+            <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
+              <td><div class="stack-name">
+                <input class="row-name" value="${escapeHtml(n.name)}" />
+              </div></td>
+              <td><input class="row-url mono" value="${escapeHtml(n.public_url)}" /></td>
+              <td class="n-isp-cell"><div class="n-isp-row">
+                <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="ct" ${(n.isp_tags || []).includes("ct") ? "checked" : ""} />电信</label>
+                <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="cu" ${(n.isp_tags || []).includes("cu") ? "checked" : ""} />联通</label>
+                <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="cm" ${(n.isp_tags || []).includes("cm") ? "checked" : ""} />移动</label>
+              </div></td>
+              <td><input class="row-weight mono" type="number" min="1" max="100" step="1" value="${n.weight}" style="width:72px;" /></td>
+              <td>${statusBadge(n)}</td>
+              <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
+              <td class="actions">
+                <button class="btn btn-primary" data-act="save">保存</button>
+                <button class="btn btn-ghost" data-act="cancel">取消</button>
+              </td>
+            </tr>
+          `;
+        }
+        const backupBadge = role === "backup"
+          ? `<span class="badge" style="${ISP_CHIP_STYLE};border-style:dashed;opacity:.75;" title="备用节点（主成员全部失效时才启用）">备</span>`
+          : "";
+        return `
+          <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
+            <td><div class="stack-name">
+              <span style="display:inline-flex;align-items:center;gap:6px;"><strong>${escapeHtml(n.name)}</strong>${backupBadge}</span>
+            </div></td>
+            <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
+            <td>${ispBadges(n.isp_tags)}</td>
+            <td class="mono" title="组路由权重（1~100）">${n.weight}</td>
+            <td>${statusBadge(n)}</td>
+            <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
+            <td class="actions">
+              <button class="btn btn-ghost" data-act="toggle">${n.disabled ? "启用" : "禁用"}</button>
+              <button class="btn btn-ghost" data-act="edit">编辑</button>
+              <button class="btn btn-danger" data-act="del">删除</button>
+            </td>
+          </tr>
+        `;
+      }
+
+      function nodeTableHtml(rows) {
+        return `<div class="table-wrap table-wrap-nodes"><table>
+            <thead><tr>
+              <th>节点</th>
+              <th>public_url</th>
+              <th>网络</th>
+              <th>权重</th>
+              <th>状态</th>
+              <th>最近检测</th>
+              <th class="col-actions">操作</th>
+            </tr></thead>
+            <tbody>${rows.map((r) => nodeRowHtml(r.n, r.role)).join("")}</tbody>
+          </table></div>`;
+      }
+
       function nodePanelHtml() {
-        const pageSize = 15;
-        const totalPages = Math.max(1, Math.ceil(state.nodes.length / pageSize));
-        state.nodePage = Math.min(state.nodePage, totalPages - 1);
-        const page = state.nodePage;
-        const paged = state.nodes.slice(page * pageSize, (page + 1) * pageSize);
+        // 按代理组分类：节点属于多个组时在各组分区中都会出现；不属于任何组的归入「未分配」
+        const assigned = new Set();
+        state.groups.forEach((g) => {
+          (g.node_ids || []).forEach((id) => assigned.add(id));
+          (g.backup_node_ids || []).forEach((id) => assigned.add(id));
+        });
+        const unassigned = state.nodes.filter((n) => !assigned.has(n.id));
+
+        const sections = [];
+        state.groups.forEach((g) => {
+          const memberIds = new Set(g.node_ids || []);
+          const backupIds = new Set(g.backup_node_ids || []);
+          const rows = state.nodes
+            .filter((n) => memberIds.has(n.id) || backupIds.has(n.id))
+            .map((n) => ({ n, role: backupIds.has(n.id) ? "backup" : "member" }));
+          if (rows.length === 0) return;
+          const mainCount = rows.filter((r) => r.role !== "backup").length;
+          sections.push(`
+            <div class="node-section">
+              <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">主 ${mainCount} · 备 ${rows.length - mainCount}</span></div>
+              ${nodeTableHtml(rows)}
+            </div>`);
+        });
+        if (unassigned.length > 0) {
+          sections.push(`
+            <div class="node-section">
+              <div class="node-section-head"><strong style="color:var(--color-text-muted);">未分配</strong><span class="hint">${unassigned.length} 个节点不在任何代理组</span></div>
+              ${nodeTableHtml(unassigned.map((n) => ({ n, role: null })))}
+            </div>`);
+        }
+
         return `
           <div class="panel">
             <div class="toolbar">
@@ -1111,70 +1203,10 @@
               <button class="btn btn-ghost" id="h-sync"><span class="hide-sm">↑ 重推所有节点</span><span class="only-sm">↑ 重推</span></button>
               <button class="btn btn-primary" id="n-add">+ 节点</button>
             </div>
-            <p class="hint" style="margin:-6px 0 14px;">组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
+            <p class="hint" style="margin:-6px 0 14px;">按代理组分类展示；组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
             ${state.nodes.length === 0
               ? '<div class="empty"><div class="empty-icon">🖧</div>还没有节点</div>'
-              : `<div class="table-wrap table-wrap-nodes"><table>
-                  <thead><tr>
-                    <th>节点</th>
-                    <th>public_url</th>
-                    <th>网络</th>
-                    <th>权重</th>
-                    <th>状态</th>
-                    <th>最近检测</th>
-                    <th class="col-actions">操作</th>
-                  </tr></thead>
-                  <tbody>
-                    ${paged.map((n, pi) => {
-                      const h = state.health[n.id] || {};
-                      const editing = state.editingNode === n.id;
-                      if (editing) {
-                        return `
-                          <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
-                            <td><div class="stack-name">
-                              <input class="row-name" value="${escapeHtml(n.name)}" />
-                            </div></td>
-                            <td><input class="row-url mono" value="${escapeHtml(n.public_url)}" /></td>
-                            <td class="n-isp-cell"><div class="n-isp-row">
-                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="ct" ${(n.isp_tags || []).includes("ct") ? "checked" : ""} />电信</label>
-                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="cu" ${(n.isp_tags || []).includes("cu") ? "checked" : ""} />联通</label>
-                              <label class="hint" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="n-isp" value="cm" ${(n.isp_tags || []).includes("cm") ? "checked" : ""} />移动</label>
-                            </div></td>
-                            <td><input class="row-weight mono" type="number" min="1" max="100" step="1" value="${n.weight}" style="width:72px;" /></td>
-                            <td>${statusBadge(n)}</td>
-                            <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
-                            <td class="actions">
-                              <button class="btn btn-primary" data-act="save">保存</button>
-                              <button class="btn btn-ghost" data-act="cancel">取消</button>
-                            </td>
-                          </tr>
-                        `;
-                      }
-                      return `
-                        <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
-                          <td><div class="stack-name">
-                            <strong>${escapeHtml(n.name)}</strong>
-                          </div></td>
-                          <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
-                          <td>${ispBadges(n.isp_tags)}</td>
-                          <td class="mono" title="组路由权重（1~100）">${n.weight}</td>
-                          <td>${statusBadge(n)}</td>
-                          <td title="${escapeHtml(h.last_check ?? "")}">${escapeHtml(relTime(h.last_check))}</td>
-                          <td class="actions">
-                            <button class="btn btn-ghost" data-act="toggle">${n.disabled ? "启用" : "禁用"}</button>
-                            <button class="btn btn-ghost" data-act="edit">编辑</button>
-                            <button class="btn btn-danger" data-act="del">删除</button>
-                          </td>
-                        </tr>
-                      `;
-                    }).join("")}
-                  </tbody>
-                </table>${totalPages > 1 ? `<div class="pager">
-                  <button class="btn btn-ghost" id="nprev" ${page === 0 ? "disabled" : ""}>上一页</button>
-                  <span>${page + 1} / ${totalPages}</span>
-                  <button class="btn btn-ghost" id="nnext" ${page >= totalPages - 1 ? "disabled" : ""}>下一页</button>
-                </div>` : ""}</div>`
-            }
+              : sections.join("")}
           </div>
         `;
       }
@@ -1184,11 +1216,6 @@
         c.querySelector("#n-add").onclick = openAddNodeModal;
         c.querySelector("#h-sync").onclick = resyncAndReport;
         c.querySelector("#n-probe").onclick = probeAndReport;
-
-        const nprev = c.querySelector("#nprev");
-        if (nprev) nprev.onclick = () => { state.nodePage--; render(); };
-        const nnext = c.querySelector("#nnext");
-        if (nnext) nnext.onclick = () => { state.nodePage++; render(); };
 
         c.querySelectorAll(".table-wrap-nodes tbody tr").forEach((tr) => {
           const id = tr.dataset.id;
