@@ -100,6 +100,7 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 - **未绑组 emby（node 模式）**：直接 Worker local（日志 `mode=local reason=no-group`）。
 - **本地代理**：Worker 直接 fetch 后端回传，隐藏客户端真实 IP，并对后端 302 / PlaybackInfo / M3U8 切片里的绝对 URL 做同源/跨域改写：同源改写为名称形式 `/emby/<name>/path`，跨域（CDN 直链）改写为编码地址形式 `/emby/<encodeURIComponent(url)>`。静态资源走 CF 边缘缓存（cacheEverything 86400s + `Cache-Control: public`），其余 `no-store`。
 - 全局模式切换（PUT `/admin/api/config`）只改 `config_meta.proxy_mode`，不写 `embys` 表，也不 bump version / fan-out（节点 snapshot 只含 path_prefix/backend_url，与模式无关）。
+- **路由热路径快照**：名称访问 / 地址访问 / `/doubanapi` 的决策数据（embys、nodes、组关系、`proxy_mode`）合为单次 D1 batch 读取，并做 isolate 内存快照缓存（10s TTL，冷启动并发请求共享同一 in-flight 读取）；D1 读失败沿用上次成功快照（serve-stale，避免空配置导致全部 404）。配置/节点/组变更最长约 10s 内在各 isolate 生效；管理 API/UI 走实时读取，不受该缓存影响。
 
 ### 代理组路由（per-emby，仅 node 模式下生效）
 
@@ -144,6 +145,8 @@ cf-worker 到节点的 `POST /admin/sync` payload 完全沿用旧 schema，向�
 ### cf-worker（wrangler secrets）
 
 `ADMIN_TOKEN`（管理 UI 登录）、`EMBY_SYNC_TOKEN`（推节点用）。可选环境变量 `REFERER_RULES_URL`（`/url` 通用代理的外部 Referer 规则 txt，默认 `https://static.laoz.org/proxy/proxy_prefer.txt`）。
+
+管理 UI 会话为 HMAC-SHA256 签名 Cookie（`admin_token=<uuid>.<expiryMs>.<sig>`，签名密钥即 `ADMIN_TOKEN`，7 天有效，服务端零存储）；更换 `ADMIN_TOKEN` 会使存量会话全部失效，需重新登录。脚本调用继续用 `Authorization: Bearer <ADMIN_TOKEN>`。
 
 - 地址访问（`/emby/http(s)://...`）与通用代理（`/url`）均无鉴权（token 已移除），等同 open proxy，依赖 Worker 域名不公开；私网/保留地址会被 `isPrivateHost` 拦截（403）。
 - `EMBY_SYNC_TOKEN` 在 cf-worker 与所有节点上必须 byte-for-byte 一致，不一致 → 节点 401。

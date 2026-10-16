@@ -5,22 +5,65 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * 接受两种鉴权方式：
- * 1) Cookie: admin_token=<SESSION_ID>（UI 登录后下发，避免明文 ADMIN_TOKEN）
+ * 1) Cookie: admin_token=<SESSION>（UI 登录后下发）。SESSION 为
+ *    `uuid.expiryMs.hmacHex`，HMAC-SHA256 密钥为 ADMIN_TOKEN——服务端零存储，
+ *    签名保证凭证只能由登录流程签发，伪造任意 UUID 无效。
  * 2) Authorization: Bearer <ADMIN_TOKEN>（脚本 / curl 调用）
- *
- * session 无需服务端存储：cookie 本身即凭证，UUID 不可猜测。
  */
-export function checkAdminAuth(request: Request, env: Env): boolean {
+export async function checkAdminAuth(request: Request, env: Env): Promise<boolean> {
   const auth = request.headers.get("Authorization");
   if (auth?.startsWith("Bearer ")) {
-    return auth.slice("Bearer ".length) === env.ADMIN_TOKEN;
+    return timingSafeEqual(auth.slice("Bearer ".length), env.ADMIN_TOKEN);
   }
   const sessionId = getCookie(request, ADMIN_COOKIE);
-  return sessionId !== null && UUID_RE.test(sessionId);
+  return sessionId !== null && (await verifySession(env.ADMIN_TOKEN, sessionId));
 }
 
-export function createSession(): string {
-  return crypto.randomUUID();
+export async function createSession(env: Env): Promise<string> {
+  return signSession(
+    env.ADMIN_TOKEN,
+    crypto.randomUUID(),
+    Date.now() + ADMIN_COOKIE_MAX_AGE * 1000,
+  );
+}
+
+export async function signSession(
+  secret: string,
+  uuid: string,
+  expiryMs: number,
+): Promise<string> {
+  const sig = await hmacHex(secret, `${uuid}.${expiryMs}`);
+  return `${uuid}.${expiryMs}.${sig}`;
+}
+
+export async function verifySession(secret: string, session: string): Promise<boolean> {
+  const parts = session.split(".");
+  if (parts.length !== 3) return false;
+  const [uuid, expiryRaw, sig] = parts as [string, string, string];
+  if (!UUID_RE.test(uuid)) return false;
+  const expiry = Number(expiryRaw);
+  if (!Number.isFinite(expiry) || expiry < Date.now()) return false;
+  return timingSafeEqual(sig, await hmacHex(secret, `${uuid}.${expiry}`));
+}
+
+async function hmacHex(secret: string, msg: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(msg));
+  return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 export function destroySession(_request: Request): void {
