@@ -1,9 +1,11 @@
 import type {
   ConfigMeta,
   EmbysKV,
+  EmbyRecord,
   Env,
   HealthKV,
   NodeHealth,
+  NodeRecord,
   NodesKV,
   ProxyGroup,
   ProxyGroupWithMembers,
@@ -143,27 +145,107 @@ export async function readGroupsWithMembers(env: Env): Promise<ProxyGroupWithMem
   return list;
 }
 
-export interface GroupNodeIds {
-  primary: string[];
-  backup: string[];
+// ---------- 路由热路径快照 ----------
+// 名称/地址访问的决策数据（embys / nodes / config_meta / 组关系）合为单次 D1 batch
+// （1 个往返），配 isolate 内存快照缓存：TTL 内零 D1 读取；冷启动并发请求共享同一
+// in-flight（风暴只发一次 D1）。D1 读失败时沿用上次成功快照（serve-stale），避免
+// 「空配置 → 全部 404」。配置变更最长约 ROUTING_TTL_MS 后在各 isolate 生效；
+// 管理接口仍走 readEmbys/readNodes 等实时读取，面板不受缓存影响。
+
+export const ROUTING_TTL_MS = 10_000;
+
+export interface GroupMemberships {
+  [groupId: number]: { primary: string[]; backup: string[] };
 }
 
-export async function readGroupNodeIds(
-  env: Env,
-  groupId: number,
-): Promise<GroupNodeIds> {
-  const res = await env.EMBY_DB.prepare(
-    "SELECT node_id, is_backup FROM node_groups WHERE group_id = ?",
-  )
-    .bind(groupId)
-    .all<{ node_id: string; is_backup: number }>();
-  if (!res.success || !res.results) return { primary: [], backup: [] };
-  const primary: string[] = [];
-  const backup: string[] = [];
-  for (const r of res.results) {
-    (r.is_backup === 1 ? backup : primary).push(r.node_id);
-  }
-  return { primary, backup };
+export interface RoutingSnapshot {
+  embys: EmbyRecord[];
+  version: number;
+  proxyMode: ConfigMeta["proxy_mode"];
+  nodes: NodeRecord[];
+  memberships: GroupMemberships;
+}
+
+let routingCache: { snap: RoutingSnapshot; ts: number } | null = null;
+let routingInflight: Promise<RoutingSnapshot> | null = null;
+
+// 仅供测试：清空快照缓存与 in-flight 引用
+export function __resetRoutingCacheForTests(): void {
+  routingCache = null;
+  routingInflight = null;
+}
+
+function emptyRoutingSnapshot(): RoutingSnapshot {
+  return { embys: [], version: 0, proxyMode: "node", nodes: [], memberships: {} };
+}
+
+export async function readRoutingSnapshot(env: Env): Promise<RoutingSnapshot> {
+  const hit = routingCache;
+  if (hit && Date.now() - hit.ts < ROUTING_TTL_MS) return hit.snap;
+  if (routingInflight) return routingInflight;
+
+  routingInflight = (async () => {
+    try {
+      const [embysRes, verRes, nodesRes, groupsRes] = await env.EMBY_DB.batch([
+        env.EMBY_DB.prepare(
+          "SELECT name, backend_url, group_id, created_at FROM embys ORDER BY name",
+        ),
+        env.EMBY_DB.prepare("SELECT version, proxy_mode FROM config_meta WHERE id = 1"),
+        env.EMBY_DB.prepare(
+          "SELECT id, name, public_url, created_at, isp_tags, weight, disabled FROM nodes ORDER BY created_at, id",
+        ),
+        env.EMBY_DB.prepare("SELECT group_id, node_id, is_backup FROM node_groups"),
+      ]);
+      if (!embysRes.success || !verRes.success || !nodesRes.success || !groupsRes.success) {
+        throw new Error("D1 batch failed");
+      }
+
+      const meta = (verRes.results?.[0] ?? {}) as { version?: number; proxy_mode?: string };
+      const memberships: GroupMemberships = {};
+      for (const m of (groupsRes.results ?? []) as {
+        group_id: number;
+        node_id: string;
+        is_backup: number;
+      }[]) {
+        let entry = memberships[m.group_id];
+        if (!entry) {
+          entry = { primary: [], backup: [] };
+          memberships[m.group_id] = entry;
+        }
+        (m.is_backup === 1 ? entry.backup : entry.primary).push(m.node_id);
+      }
+
+      const snap: RoutingSnapshot = {
+        embys: (embysRes.results ?? []).map((r: any) => ({
+          name: r.name,
+          backend_url: r.backend_url,
+          group_id: r.group_id ?? null,
+          created_at: r.created_at,
+        })),
+        version: meta.version ?? 0,
+        proxyMode: (meta.proxy_mode as ConfigMeta["proxy_mode"]) || "node",
+        nodes: (nodesRes.results ?? []).map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          public_url: r.public_url,
+          created_at: r.created_at,
+          isp_tags: parseIspTags(r.isp_tags),
+          weight: Number.isInteger(r.weight) && r.weight > 0 ? r.weight : 1,
+          disabled: r.disabled === 1,
+        })),
+        memberships,
+      };
+      routingCache = { snap, ts: Date.now() };
+      return snap;
+    } catch (e) {
+      console.log("readRoutingSnapshot failed:", (e as Error).message);
+      if (routingCache) return routingCache.snap; // serve-stale
+      return emptyRoutingSnapshot();
+    } finally {
+      routingInflight = null;
+    }
+  })();
+  return routingInflight;
 }
 
 export async function readHealth(env: Env): Promise<HealthKV> {

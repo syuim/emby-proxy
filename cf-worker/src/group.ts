@@ -1,7 +1,7 @@
 import { probeAlive } from "./alive";
 import { classifyIsp, type IspClass } from "./isp";
-import { readGroupNodeIds } from "./storage";
-import type { Env, NodeRecord } from "./types";
+import type { GroupMemberships } from "./storage";
+import type { NodeRecord } from "./types";
 
 // 从 CF 请求属性取入口网络：asn 命中本地表；未命中用组织名二次兜底
 export function classifyClientIsp(request: Request): IspClass {
@@ -52,14 +52,14 @@ export function pickWeighted(pool: NodeRecord[]): NodeRecord {
  * 4. 全部失效 / 组不存在 / 组内成员不在节点列表 → null（由调用方走 Worker local 兜底，不写 config_meta）。
  */
 export async function chooseNodeFromGroup(
-  env: Env,
   groupId: number,
   nodes: NodeRecord[],
+  memberships: GroupMemberships,
   isp: IspClass,
 ): Promise<GroupPick | null> {
   // overseas 入口不经节点：不探测不选池，由 router 直接 307 到 emby 后端
   if (isp === "overseas") return null;
-  const { primary, backup } = await readGroupNodeIds(env, groupId);
+  const { primary, backup } = memberships[groupId] ?? { primary: [], backup: [] };
 
   const candidates = nodes.filter(
     (n) => primary.includes(n.id) || backup.includes(n.id),

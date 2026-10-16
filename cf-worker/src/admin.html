@@ -756,10 +756,9 @@
         catch { return false; }
       }
       async function refreshAll() {
-        const [n, e, h, c, g, d] = await Promise.all([
+        const [n, e, c, g, d] = await Promise.all([
           api("/emby/admin/api/nodes"),
           api("/emby/admin/api/embys"),
-          api("/emby/admin/api/health"),
           api("/emby/admin/api/config"),
           api("/emby/admin/api/groups"),
           api("/emby/admin/api/diag"),
@@ -776,7 +775,7 @@
           return a.name.localeCompare(b.name);
         });
         state.groups = g.groups || [];
-        state.health = h.nodes || {};
+        state.health = n.health || {};
         state.proxyMode = c.proxy_mode || "node";
         state.tgBotToken = c.tg_bot_token || "";
         state.tgChatId = c.tg_chat_id || "";

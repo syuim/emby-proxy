@@ -1,6 +1,6 @@
 import { EMBY_BASE_PATH, RESERVED_NAMES, DOUBAN_API_BASE_PATH, DOUBAN_API_EMBY_NAME, TMDB_BASE_PATH, URL_BASE_PATH, STATIC_ASSET_CACHE_TTL, normalizeUrl } from "./constants";
 import { handleUrlRequest } from "./urlproxy";
-import { readConfigMeta, readEmbys, readNodes } from "./storage";
+import { readRoutingSnapshot } from "./storage";
 import { chooseNodeFromGroup, classifyClientIsp } from "./group";
 import { notifyNewIp } from "./notify";
 import type { EmbyRecord, Env } from "./types";
@@ -37,13 +37,9 @@ async function routeNameAccess(
   notify: boolean,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const [embysKV, nodesKV, configMeta] = await Promise.all([
-    readEmbys(env),
-    readNodes(env),
-    readConfigMeta(env),
-  ]);
+  const snap = await readRoutingSnapshot(env);
 
-  const emby = embysKV.embys.find((e) => e.name === embyName);
+  const emby = snap.embys.find((e) => e.name === embyName);
   if (!emby) {
     return notFound(`unknown emby '${embyName}'`);
   }
@@ -57,7 +53,7 @@ async function routeNameAccess(
 
   // 规则：全局模式决定路由
   const target = buildTargetUrl(emby.backend_url, subpath, url.search);
-  switch (configMeta.proxy_mode) {
+  switch (snap.proxyMode) {
     case "direct":
       console.log(`[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=direct`);
       return new Response(null, {
@@ -79,7 +75,7 @@ async function routeNameAccess(
         headers: { Location: target, "Cache-Control": "no-store" },
       });
     }
-    const pick = await chooseNodeFromGroup(env, emby.group_id, nodesKV.nodes, isp);
+    const pick = await chooseNodeFromGroup(emby.group_id, snap.nodes, snap.memberships, isp);
     if (pick) {
       console.log(
         `[req] ip=${clientIp} isp=${isp} emby=${emby.name} mode=group group=${emby.group_id} stage=${pick.stage} alive=${pick.aliveNames.join(",")} pool=${pick.poolNames.join(",")} node=${pick.node.name}`,
@@ -412,9 +408,9 @@ export async function handleDirectRequest(
     ? parsed.search + (url.search ? "&" + url.search.slice(1) : "")
     : url.search;
 
-  const embysKV = await readEmbys(env);
+  const snap = await readRoutingSnapshot(env);
 
-  let emby = embysKV.embys.find((e) => e.backend_url === backendOrigin);
+  let emby = snap.embys.find((e) => e.backend_url === backendOrigin);
   // 只在原样形式（用户粘贴入口）时自动注册；编码形式是改写回流（多为 CDN），不注册避免刷表
   if (!emby && rawForm) {
     emby = (await registerDirectEmby(env, backendOrigin)) ?? undefined;
