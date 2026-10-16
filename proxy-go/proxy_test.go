@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -460,24 +461,101 @@ func TestPostFollows303Redirect(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Request body limit
+// Request body handling: bodies up to bodyReplayLimit are buffered and can be
+// replayed across redirect hops; larger bodies are streamed once and the
+// redirect response is passed through instead of followed.
 // ---------------------------------------------------------------------------
 
-func TestRequestBodyLimit(t *testing.T) {
-	store := NewStore("")
-	store.ApplySnapshot(1, []ProxyEntry{{PathPrefix: "media", BackendURL: "http://127.0.0.1:1"}})
-	ph := NewProxyHandler(store)
+func TestBodyAtReplayLimitReplayedOnRedirect(t *testing.T) {
+	var gotLen atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path == "/media/test" {
+			w.Header().Set("Location", "/media/next")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+		gotLen.Store(int64(len(body)))
+		fmt.Fprint(w, "replayed")
+	}))
+	defer backend.Close()
 
-	// Send a body larger than maxRequestBodySize
-	huge := strings.Repeat("x", maxRequestBodySize+1)
-	req := httptest.NewRequest(http.MethodPost, "/media/test", strings.NewReader(huge))
+	ph, _ := newTestSetup(backend.URL)
+	payload := strings.Repeat("y", bodyReplayLimit)
+	req := httptest.NewRequest(http.MethodPost, "/media/test", strings.NewReader(payload))
 	rec := httptest.NewRecorder()
 	ph.ServeHTTP(rec, req)
 	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Fatalf("expected 413, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 after redirect follow, got %d", resp.StatusCode)
+	}
+	if string(body) != "replayed" {
+		t.Fatalf("expected 'replayed', got %q", body)
+	}
+	if gotLen.Load() != int64(len(payload)) {
+		t.Fatalf("expected replayed body length %d, got %d", len(payload), gotLen.Load())
+	}
+}
+
+func TestLargeBodyStreamedThrough(t *testing.T) {
+	var gotLen atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotLen.Store(int64(len(body)))
+		fmt.Fprint(w, "ok")
+	}))
+	defer backend.Close()
+
+	ph, _ := newTestSetup(backend.URL)
+	payload := strings.Repeat("x", bodyReplayLimit+1)
+	req := httptest.NewRequest(http.MethodPost, "/media/test", strings.NewReader(payload))
+	rec := httptest.NewRecorder()
+	ph.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("expected 'ok', got %q", body)
+	}
+	if gotLen.Load() != int64(len(payload)) {
+		t.Fatalf("expected forwarded body length %d, got %d", len(payload), gotLen.Load())
+	}
+}
+
+func TestLargeBodyStreamedRedirectPassedThrough(t *testing.T) {
+	var hits atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		io.Copy(io.Discard, r.Body)
+		w.Header().Set("Location", "/next")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer backend.Close()
+
+	ph, _ := newTestSetup(backend.URL)
+	payload := strings.Repeat("x", bodyReplayLimit+1)
+	req := httptest.NewRequest(http.MethodPost, "/media/test", strings.NewReader(payload))
+	rec := httptest.NewRecorder()
+	ph.ServeHTTP(rec, req)
+	resp := rec.Result()
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307 passed through, got %d", resp.StatusCode)
+	}
+	if resp.Header.Get("Location") != "/next" {
+		t.Fatalf("expected Location /next passed through, got %q", resp.Header.Get("Location"))
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("redirect should not be followed: backend hits=%d", n)
 	}
 }
 

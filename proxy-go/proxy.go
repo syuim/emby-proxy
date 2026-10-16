@@ -16,7 +16,12 @@ import (
 )
 
 const maxRedirects = 5
-const maxRequestBodySize = 64 << 20 // 64 MiB
+const maxRequestBodySize = 64 << 20 // 64 MiB (admin /admin/sync body limit)
+
+// bodyReplayLimit is the max request body size that is buffered so it can be
+// replayed across redirect hops. Larger bodies are streamed through once and
+// redirects are passed through to the client instead of followed.
+const bodyReplayLimit = 1 << 20 // 1 MiB
 
 // hopByHop headers that must not be forwarded (RFC 7230 §6.1).
 var hopByHop = map[string]bool{
@@ -79,6 +84,10 @@ func NewProxyHandler(store *Store) *ProxyHandler {
 		httpClient: &http.Client{
 			Timeout: 0, // no overall timeout; streaming must not be cut
 			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   10 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
 				TLSHandshakeTimeout:   10 * time.Second,
 				ResponseHeaderTimeout: 30 * time.Second,
 				IdleConnTimeout:       120 * time.Second,
@@ -127,21 +136,27 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	log.Printf("req: %s %s → %s", r.Method, r.URL.Path, shortenURL(targetURL))
 
-	// Read request body for non-GET/HEAD methods (buffered for redirect replay)
+	// Non-GET/HEAD requests may carry a body. Bodies up to bodyReplayLimit are
+	// buffered in full so redirect hops can replay them; larger bodies are
+	// streamed through once (no redirect replay possible).
 	var bodyBytes []byte
+	var streamBody io.Reader
+	replayable := true
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		var err error
-		limited := http.MaxBytesReader(nil, r.Body, maxRequestBodySize)
-		bodyBytes, err = io.ReadAll(limited)
+		defer r.Body.Close()
+		head, err := io.ReadAll(io.LimitReader(r.Body, bodyReplayLimit+1))
 		if err != nil {
-			if isMaxBytesError(err) {
-				http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
-			} else {
-				http.Error(w, fmt.Sprintf("Bad Gateway: read body: %v", err), http.StatusBadGateway)
-			}
+			http.Error(w, fmt.Sprintf("Bad Gateway: read body: %v", err), http.StatusBadGateway)
 			return
 		}
-		r.Body.Close()
+		if len(head) > bodyReplayLimit {
+			replayable = false
+			streamBody = io.MultiReader(bytes.NewReader(head), r.Body)
+			log.Printf("large request body (read %d bytes, content-length=%d): streamed, redirects will not be followed",
+				len(head), r.ContentLength)
+		} else {
+			bodyBytes = head
+		}
 	}
 
 	// Filter request headers once
@@ -153,8 +168,11 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		var bodyReader io.Reader
-		if bodyBytes != nil {
-			bodyReader = bytes.NewReader(bodyBytes)
+		switch {
+		case bodyBytes != nil:
+			bodyReader = bytes.NewReader(bodyBytes) // fresh reader per redirect hop
+		case streamBody != nil:
+			bodyReader = streamBody // single use only
 		}
 
 		req, err := http.NewRequestWithContext(r.Context(), currentMethod, currentURL, bodyReader)
@@ -173,6 +191,8 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(bodyBytes) > 0 {
 			req.ContentLength = int64(len(bodyBytes))
+		} else if streamBody != nil {
+			req.ContentLength = r.ContentLength // -1 keeps chunked encoding
 		}
 
 		resp, err := ph.httpClient.Do(req)
@@ -207,9 +227,26 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// A streamed (non-replayable) request body cannot be re-sent to the
+		// redirect target: pass the redirect response through as-is.
+		if !replayable {
+			loc := resp.Header.Get("Location")
+			writeFilteredResponseHeaders(w, resp)
+			w.WriteHeader(resp.StatusCode)
+			if resp.Body != nil {
+				if _, err := io.Copy(w, resp.Body); err != nil {
+					log.Printf("stream error: %v", err)
+				}
+				resp.Body.Close()
+			}
+			log.Printf("redirect not followed (streamed body): %d %s → %s",
+				resp.StatusCode, shortenURL(currentURL), shortenURL(loc))
+			return
+		}
+
 		// Redirect handling
 		if redirectsLeft <= 0 {
-			resp.Body.Close()
+			drainAndClose(resp.Body)
 			log.Printf("redirect limit hit (%d) at %s", maxRedirects, shortenURL(currentURL))
 			http.Error(w, fmt.Sprintf("Bad Gateway: redirect limit exceeded (%d hops)", maxRedirects), http.StatusBadGateway)
 			return
@@ -217,7 +254,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		loc := resp.Header.Get("Location")
 		if loc == "" {
-			resp.Body.Close()
+			drainAndClose(resp.Body)
 			log.Printf("redirect %d without Location header at %s", resp.StatusCode, shortenURL(currentURL))
 			writeFilteredResponseHeaders(w, resp)
 			w.WriteHeader(resp.StatusCode)
@@ -226,7 +263,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		nextURL, err := url.Parse(loc)
 		if err != nil {
-			resp.Body.Close()
+			drainAndClose(resp.Body)
 			http.Error(w, "Bad Gateway: invalid redirect URL", http.StatusBadGateway)
 			return
 		}
@@ -234,7 +271,7 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !nextURL.IsAbs() {
 			base, err := url.Parse(currentURL)
 			if err != nil {
-				resp.Body.Close()
+				drainAndClose(resp.Body)
 				log.Printf("redirect resolve error: %v", err)
 				http.Error(w, "Bad Gateway: invalid redirect", http.StatusBadGateway)
 				return
@@ -249,14 +286,14 @@ func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		nextHost, nextPort, ok := normalizeOrigin(nextURLStr)
 		sameOrigin := ok && nextHost == allowedHost && nextPort == allowedPort
 		if !sameOrigin && isDangerousRedirect(nextURLStr) {
-			resp.Body.Close()
+			drainAndClose(resp.Body)
 			log.Printf("redirect to dangerous target blocked: %s → %s",
 				shortenURL(currentURL), shortenURL(nextURLStr))
 			http.Error(w, "Bad Gateway: redirect target is not allowed", http.StatusBadGateway)
 			return
 		}
 
-		resp.Body.Close()
+		drainAndClose(resp.Body)
 
 		// 303 → GET; 301/302 + POST → GET
 		if resp.StatusCode == 303 || (resp.StatusCode == 301 || resp.StatusCode == 302) && currentMethod == http.MethodPost {
@@ -315,9 +352,14 @@ func sanitizeSetCookie(cookie string) string {
 	return strings.Join(kept, "; ")
 }
 
-func isMaxBytesError(err error) bool {
-	var maxErr *http.MaxBytesError
-	return errors.As(err, &maxErr)
+// drainAndClose discards a bounded amount of the response body before closing
+// it, so the upstream connection can be reused.
+func drainAndClose(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
+	io.Copy(io.Discard, io.LimitReader(body, 64<<10))
+	body.Close()
 }
 
 const shortenURLLimit = 80

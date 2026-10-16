@@ -4,6 +4,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -43,14 +44,28 @@ func (bp *BackendProber) loop() {
 	}
 }
 
+// probeAll probes every backend concurrently and writes the collected
+// latencies to the store in one batch.
 func (bp *BackendProber) probeAll() {
-	for _, entry := range bp.store.ListProxies() {
+	entries := bp.store.ListProxies()
+	results := make(map[string]int64, len(entries))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, entry := range entries {
 		if entry.PathPrefix == "" || entry.BackendURL == "" {
 			continue
 		}
-		ms := probeLatency(entry.BackendURL)
-		bp.store.SetBackendLatency(entry.PathPrefix, ms)
+		wg.Add(1)
+		go func(e ProxyEntry) {
+			defer wg.Done()
+			ms := probeLatency(e.BackendURL)
+			mu.Lock()
+			results[e.PathPrefix] = ms
+			mu.Unlock()
+		}(entry)
 	}
+	wg.Wait()
+	bp.store.SetBackendLatencies(results)
 }
 
 // probeLatency measures TCP connect time to the host:port of a backend URL.

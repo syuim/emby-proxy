@@ -102,6 +102,7 @@ type Snapshot struct {
 // Store holds the in-memory proxy config with thread-safe access and disk persistence.
 type Store struct {
 	mu               sync.RWMutex
+	persistMu        sync.Mutex        // serializes disk writes so concurrent syncs cannot interleave
 	proxies          map[string]string // prefix → backend_url
 	version          int
 	dataDir          string
@@ -156,10 +157,10 @@ func (s *Store) GetBackend(prefix string) string {
 	return s.proxies[prefix]
 }
 
-// SetBackendLatency stores a latency measurement for a backend prefix.
-func (s *Store) SetBackendLatency(prefix string, latencyMs int64) {
+// SetBackendLatencies replaces all backend latency measurements in one write.
+func (s *Store) SetBackendLatencies(m map[string]int64) {
 	s.mu.Lock()
-	s.backendLatencies[prefix] = latencyMs
+	s.backendLatencies = m
 	s.mu.Unlock()
 }
 
@@ -257,6 +258,18 @@ func (s *Store) persist(version int, proxies []ProxyEntry) {
 	if s.dataDir == "" {
 		return // skip persistence in tests
 	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
+	// 并发 sync 时可能乱序到达：若内存版本已被更新过则跳过，由最新一次负责落盘
+	s.mu.RLock()
+	cur := s.version
+	s.mu.RUnlock()
+	if version != cur {
+		log.Printf("persist skipped: version=%d != current=%d", version, cur)
+		return
+	}
+
 	payload := Snapshot{
 		Version:  version,
 		Proxies:  proxies,
