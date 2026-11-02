@@ -688,7 +688,7 @@
       const DOUBAN_EMBY_NAME = "douban";
       const MODE_LABELS = { node: "Node（组路由）", local: "Worker 代理", direct: "直连" };
       const $app = document.getElementById("app");
-      const state = { tab: (v => { if (v === "nodes") return "groups"; return ["embys", "groups", "config"].includes(v) ? v : "embys"; })(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", tgBotToken: "", tgChatId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, diag: null };
+      const state = { tab: (v => ["embys", "groups"].includes(v) ? v : "embys")(localStorage.getItem("emby-router-tab")), nodes: [], embys: [], groups: [], health: {}, proxyMode: "node", tgBotToken: "", tgChatId: "", theme: "auto", editingEmby: null, editingNode: null, embyPage: 0, diag: null };
 
       // ---------- 主题 ----------
       function applyTheme(mode) {
@@ -891,6 +891,7 @@
             <h1>🎬 Emby Router</h1>
             <span class="stats">embys ${state.embys.length} · nodes ${state.nodes.length} · groups ${state.groups.length}</span>
             ${diagChip()}
+            <button class="btn btn-icon" id="btn-config" title="配置">⚙<span class="hide-sm"> 配置</span></button>
             <button class="btn btn-icon" id="btn-theme">${themeIcon(state.theme)}</button>
             <button class="btn btn-icon" id="btn-refresh">↻<span class="hide-sm"> 刷新</span></button>
             <button class="btn btn-icon" id="btn-logout">登出</button>
@@ -900,7 +901,6 @@
               <div class="tabs" id="nav-tabs">
                 <button data-tab="embys" class="${state.tab === "embys" ? "active" : ""}">Embys</button>
                 <button data-tab="groups" class="${state.tab === "groups" ? "active" : ""}">代理组 + 节点</button>
-                <button data-tab="config" class="${state.tab === "config" ? "active" : ""}">配置</button>
               </div>
               <div class="mode-selector">
                 <label class="mode-label">模式</label>
@@ -914,6 +914,7 @@
             <div id="tab-content"></div>
           </main>
         `;
+        $app.querySelector("#btn-config").onclick = openConfigModal;
         $app.querySelector("#btn-theme").onclick = () => { applyTheme(nextTheme(state.theme)); render(); };
         $app.querySelector("#btn-refresh").onclick = () => refreshAll().catch((e) => toast(e.message, "err"));
         $app.querySelector("#btn-logout").onclick = async () => {
@@ -942,8 +943,7 @@
           };
         });
         if (state.tab === "embys") renderEmbys();
-        else if (state.tab === "groups") renderGroups();
-        else renderConfig();
+        else renderGroups();
       }
 
       function renderLogin() {
@@ -1101,9 +1101,12 @@
       }
 
       // ---------- 节点列表面板（嵌在代理组页下方，按代理组分类展示） ----------
-      function nodeRowHtml(n) {
+      function nodeRowHtml(n, isBackup = false) {
         const h = state.health[n.id] || {};
         const editing = state.editingNode === n.id;
+        const backupBadge = isBackup
+          ? `<span class="badge" style="${ISP_CHIP_STYLE}border-style:dashed;opacity:.75;" title="备用节点，仅主成员全部失效时启用">备</span>`
+          : "";
         if (editing) {
           return `
             <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
@@ -1130,6 +1133,7 @@
           <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
             <td><div class="stack-name">
               <strong>${escapeHtml(n.name)}</strong>
+              ${backupBadge}
             </div></td>
             <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
             <td>${ispBadges(n.isp_tags)}</td>
@@ -1145,7 +1149,7 @@
         `;
       }
 
-      function nodeTableHtml(nodes) {
+      function nodeTableHtml(nodes, primaryIds) {
         return `<div class="table-wrap table-wrap-nodes"><table>
             <thead><tr>
               <th>节点</th>
@@ -1156,24 +1160,28 @@
               <th>最近检测</th>
               <th class="col-actions">操作</th>
             </tr></thead>
-            <tbody>${nodes.map((n) => nodeRowHtml(n)).join("")}</tbody>
+            <tbody>${nodes.map((n) => nodeRowHtml(n, !!primaryIds && !primaryIds.has(n.id))).join("")}</tbody>
           </table></div>`;
       }
 
       function nodePanelHtml() {
-        // 按代理组分类（组分区仅展示主成员，备用关系在代理组列表查看）：
-        // 未被任何组作为主成员的节点（不在任何组 / 仅作备用）归入「未分配」，保证管理入口不丢失
+        // 按代理组分类（主成员 + 备用节点都算已分配，备用节点以「备」标记）：
+        // 既不在任何组主成员也不在任何组备用里的节点才归入「未分配」，保证管理入口不丢失
         const shown = new Set();
         const sections = [];
         state.groups.forEach((g) => {
-          const memberIds = new Set(g.node_ids || []);
-          const rows = state.nodes.filter((n) => memberIds.has(n.id));
+          const primaryIds = new Set(g.node_ids || []);
+          const backupIds = new Set(g.backup_node_ids || []);
+          const rows = state.nodes.filter(
+            (n) => primaryIds.has(n.id) || backupIds.has(n.id),
+          );
           rows.forEach((n) => shown.add(n.id));
           if (rows.length === 0) return;
+          const backupCount = rows.filter((n) => !primaryIds.has(n.id)).length;
           sections.push(`
             <div class="node-section">
-              <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">${rows.length} 个节点</span></div>
-              ${nodeTableHtml(rows)}
+              <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">${rows.length} 个节点${backupCount > 0 ? `（含 ${backupCount} 个备用）` : ""}</span></div>
+              ${nodeTableHtml(rows, primaryIds)}
             </div>`);
         });
         const unassigned = state.nodes.filter((n) => !shown.has(n.id));
@@ -1193,7 +1201,7 @@
               <button class="btn btn-ghost" id="h-sync"><span class="hide-sm">↑ 重推所有节点</span><span class="only-sm">↑ 重推</span></button>
               <button class="btn btn-primary" id="n-add">+ 节点</button>
             </div>
-            <p class="hint" style="margin:-6px 0 14px;">按代理组分类展示（仅主成员，备用关系见代理组列表），分区内按权重降序排列；组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
+            <p class="hint" style="margin:-6px 0 14px;">按代理组分类展示（含主成员与备用节点，备用节点以「备」标记），分区内按权重降序排列；组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
             ${state.nodes.length === 0
               ? '<div class="empty"><div class="empty-icon">🖧</div>还没有节点</div>'
               : sections.join("")}
@@ -1347,56 +1355,62 @@
         wireNodePanel();
       }
 
-      // ---------- 配置（Telegram 通知） ----------
-      function renderConfig() {
-        const c = $app.querySelector("#tab-content");
+      // ---------- 配置弹窗（Telegram 通知） ----------
+      function openConfigModal() {
+        const root = document.getElementById("modal-root");
         const configured = !!(state.tgBotToken && state.tgChatId);
-        c.innerHTML = `
-          <div class="panel">
-            <div class="toolbar">
-              <h2>Telegram 通知</h2>
-              <span class="badge ${configured ? "ok" : "unknown"}">${configured ? "已配置" : "未配置"}</span>
-            </div>
-            <p class="hint" style="margin:-6px 0 14px;">
-              新 IP 首次连入 Emby 代理（名称访问 / 地址访问）时推送 TG 通知；未配置前不记录任何 IP。
-              Bot Token 在 @BotFather 创建 bot 获取；Chat ID 为接收通知的会话 id（先向 bot 发送一条消息，再从 getUpdates 获取；群组为负数）。
-            </p>
-            <div class="field">
-              <label>Bot Token</label>
-              <div style="display:flex;gap:8px;">
-                <input type="password" id="tg-token" class="mono" style="flex:1;" value="${escapeHtml(state.tgBotToken)}" placeholder="123456789:AAF..." autocomplete="off" />
-                <button class="btn btn-ghost" id="tg-eye" title="显示 / 隐藏">👁</button>
+        root.innerHTML = `
+          <div class="modal-overlay">
+            <div class="modal">
+              <div class="modal-header">
+                <h3>配置 <span class="badge ${configured ? "ok" : "unknown"}" style="margin-left:6px;">${configured ? "已配置" : "未配置"}</span></h3>
+                <button class="btn btn-icon" data-close>✕</button>
               </div>
-            </div>
-            <div class="field">
-              <label>Chat ID (uid)</label>
-              <div style="display:flex;gap:8px;">
-                <input id="tg-chat" class="mono" style="flex:1;" value="${escapeHtml(state.tgChatId)}" placeholder="例如 123456789" autocomplete="off" />
-                <button class="btn btn-ghost" aria-hidden="true" style="visibility:hidden">👁</button>
+              <div class="modal-body">
+                <p class="hint" style="margin:0 0 14px;">
+                  新 IP 首次连入 Emby 代理（名称访问 / 地址访问）时推送 TG 通知；未配置前不记录任何 IP。
+                  Bot Token 在 @BotFather 创建 bot 获取；Chat ID 为接收通知的会话 id（先向 bot 发送一条消息，再从 getUpdates 获取；群组为负数）。
+                </p>
+                <div class="field">
+                  <label>Bot Token</label>
+                  <div style="display:flex;gap:8px;">
+                    <input type="password" id="tg-token" class="mono" style="flex:1;" value="${escapeHtml(state.tgBotToken)}" placeholder="123456789:AAF..." autocomplete="off" />
+                    <button class="btn btn-ghost" id="tg-eye" title="显示 / 隐藏">👁</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Chat ID (uid)</label>
+                  <div style="display:flex;gap:8px;">
+                    <input id="tg-chat" class="mono" style="flex:1;" value="${escapeHtml(state.tgChatId)}" placeholder="例如 123456789" autocomplete="off" />
+                    <button class="btn btn-ghost" aria-hidden="true" style="visibility:hidden">👁</button>
+                  </div>
+                </div>
+                <div class="modal-footer">
+                  <button class="btn btn-ghost" id="tg-test">发送测试通知</button>
+                  <button class="btn btn-primary" id="tg-save">保存</button>
+                </div>
               </div>
-            </div>
-            <div class="toolbar" style="margin-top:6px;margin-bottom:0;justify-content:flex-end;">
-              <button class="btn btn-ghost" id="tg-test">发送测试通知</button>
-              <button class="btn btn-primary" id="tg-save" style="padding:6px 11px;">保存</button>
             </div>
           </div>
         `;
-        const $token = c.querySelector("#tg-token");
-        const $chat = c.querySelector("#tg-chat");
-        c.querySelector("#tg-eye").onclick = () => {
+        wireModal(root);
+        const $token = root.querySelector("#tg-token");
+        const $chat = root.querySelector("#tg-chat");
+        root.querySelector("#tg-eye").onclick = () => {
           $token.type = $token.type === "password" ? "text" : "password";
         };
-        c.querySelector("#tg-save").onclick = async () => {
+        root.querySelector("#tg-save").onclick = async () => {
           try {
             const r = await api("/emby/admin/api/config", {
               method: "PUT",
               body: JSON.stringify({ tg_bot_token: $token.value.trim(), tg_chat_id: $chat.value.trim() }),
             });
             toast(r.tg_bot_token ? "已保存，新 IP 连入将推送通知" : "已清空，TG 通知已关闭", "ok");
+            closeModal();
             await refreshAll();
           } catch (e) { toast(e.message, "err"); }
         };
-        c.querySelector("#tg-test").onclick = async () => {
+        root.querySelector("#tg-test").onclick = async () => {
           try {
             // 用当前输入值直接测试，无需先保存
             await api("/emby/admin/api/config/test-tg", {
