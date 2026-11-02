@@ -1101,12 +1101,9 @@
       }
 
       // ---------- 节点列表面板（嵌在代理组页下方，按代理组分类展示） ----------
-      function nodeRowHtml(n, isBackup = false) {
+      function nodeRowHtml(n) {
         const h = state.health[n.id] || {};
         const editing = state.editingNode === n.id;
-        const backupBadge = isBackup
-          ? `<span class="badge" style="${ISP_CHIP_STYLE}border-style:dashed;opacity:.75;" title="备用节点，仅主成员全部失效时启用">备</span>`
-          : "";
         if (editing) {
           return `
             <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
@@ -1133,7 +1130,6 @@
           <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
             <td><div class="stack-name">
               <strong>${escapeHtml(n.name)}</strong>
-              ${backupBadge}
             </div></td>
             <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
             <td>${ispBadges(n.isp_tags)}</td>
@@ -1149,7 +1145,7 @@
         `;
       }
 
-      function nodeTableHtml(nodes, primaryIds) {
+      function nodeTableHtml(nodes) {
         return `<div class="table-wrap table-wrap-nodes"><table>
             <thead><tr>
               <th>节点</th>
@@ -1160,28 +1156,32 @@
               <th>最近检测</th>
               <th class="col-actions">操作</th>
             </tr></thead>
-            <tbody>${nodes.map((n) => nodeRowHtml(n, !!primaryIds && !primaryIds.has(n.id))).join("")}</tbody>
+            <tbody>${nodes.map((n) => nodeRowHtml(n)).join("")}</tbody>
           </table></div>`;
       }
 
       function nodePanelHtml() {
-        // 按代理组分类（主成员 + 备用节点都算已分配，备用节点以「备」标记）：
+        // 按代理组分类（主成员与备用节点都算已分配）：备用节点不混入主表，单独排在组分区下方；
         // 既不在任何组主成员也不在任何组备用里的节点才归入「未分配」，保证管理入口不丢失
         const shown = new Set();
         const sections = [];
         state.groups.forEach((g) => {
           const primaryIds = new Set(g.node_ids || []);
           const backupIds = new Set(g.backup_node_ids || []);
-          const rows = state.nodes.filter(
-            (n) => primaryIds.has(n.id) || backupIds.has(n.id),
+          const primaryRows = state.nodes.filter((n) => primaryIds.has(n.id));
+          const backupRows = state.nodes.filter(
+            (n) => backupIds.has(n.id) && !primaryIds.has(n.id),
           );
-          rows.forEach((n) => shown.add(n.id));
-          if (rows.length === 0) return;
-          const backupCount = rows.filter((n) => !primaryIds.has(n.id)).length;
+          if (primaryRows.length === 0 && backupRows.length === 0) return;
+          primaryRows.forEach((n) => shown.add(n.id));
+          backupRows.forEach((n) => shown.add(n.id));
           sections.push(`
             <div class="node-section">
-              <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">${rows.length} 个节点${backupCount > 0 ? `（含 ${backupCount} 个备用）` : ""}</span></div>
-              ${nodeTableHtml(rows, primaryIds)}
+              <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">${primaryRows.length} 个节点${backupRows.length > 0 ? ` · 备用 ${backupRows.length}` : ""}</span></div>
+              ${primaryRows.length > 0 ? nodeTableHtml(primaryRows) : '<p class="hint" style="margin:0;">暂无主成员</p>'}
+              ${backupRows.length > 0 ? `
+              <div class="node-section-head" style="margin-top:12px;"><strong style="color:var(--color-text-muted);">备用节点</strong><span class="hint">仅在主成员全部失效时启用</span></div>
+              ${nodeTableHtml(backupRows)}` : ""}
             </div>`);
         });
         const unassigned = state.nodes.filter((n) => !shown.has(n.id));
@@ -1201,7 +1201,7 @@
               <button class="btn btn-ghost" id="h-sync"><span class="hide-sm">↑ 重推所有节点</span><span class="only-sm">↑ 重推</span></button>
               <button class="btn btn-primary" id="n-add">+ 节点</button>
             </div>
-            <p class="hint" style="margin:-6px 0 14px;">按代理组分类展示（含主成员与备用节点，备用节点以「备」标记），分区内按权重降序排列；组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
+            <p class="hint" style="margin:-6px 0 14px;">按代理组分类展示（主成员在上，备用节点单独列在组内下方），分区内按权重降序排列；组路由在存活且网络匹配的节点中按权重加权随机分配流量（1~100，默认 1 等权）</p>
             ${state.nodes.length === 0
               ? '<div class="empty"><div class="empty-icon">🖧</div>还没有节点</div>'
               : sections.join("")}
