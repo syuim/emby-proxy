@@ -1101,9 +1101,12 @@
       }
 
       // ---------- 节点列表面板（嵌在代理组页下方，按代理组分类展示） ----------
-      function nodeRowHtml(n) {
+      function nodeRowHtml(n, isBackup = false) {
         const h = state.health[n.id] || {};
         const editing = state.editingNode === n.id;
+        const backupBadge = isBackup
+          ? `<span class="badge" style="${ISP_CHIP_STYLE}border-style:dashed;opacity:.75;" title="备用节点，仅主成员全部失效时启用">备</span>`
+          : "";
         if (editing) {
           return `
             <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
@@ -1130,6 +1133,7 @@
           <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
             <td><div class="stack-name">
               <strong>${escapeHtml(n.name)}</strong>
+              ${backupBadge}
             </div></td>
             <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
             <td>${ispBadges(n.isp_tags)}</td>
@@ -1145,7 +1149,7 @@
         `;
       }
 
-      function nodeTableHtml(nodes) {
+      function nodeTableHtml(nodes, backupIds) {
         return `<div class="table-wrap table-wrap-nodes"><table>
             <thead><tr>
               <th>节点</th>
@@ -1156,7 +1160,7 @@
               <th>最近检测</th>
               <th class="col-actions">操作</th>
             </tr></thead>
-            <tbody>${nodes.map((n) => nodeRowHtml(n)).join("")}</tbody>
+            <tbody>${nodes.map((n) => nodeRowHtml(n, !!backupIds && backupIds.has(n.id))).join("")}</tbody>
           </table></div>`;
       }
 
@@ -1175,10 +1179,11 @@
           const rows = [...primaryRows, ...backupRows];
           if (rows.length === 0) return;
           rows.forEach((n) => shown.add(n.id));
+          const backupOnlyIds = new Set(backupRows.map((n) => n.id));
           sections.push(`
             <div class="node-section">
               <div class="node-section-head"><strong>${escapeHtml(g.name)}</strong><span class="hint">${rows.length} 个节点${backupRows.length > 0 ? ` · 备用 ${backupRows.length}` : ""}</span></div>
-              ${nodeTableHtml(rows)}
+              ${nodeTableHtml(rows, backupOnlyIds)}
             </div>`);
         });
         const unassigned = state.nodes.filter((n) => !shown.has(n.id));
