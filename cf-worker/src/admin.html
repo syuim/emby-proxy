@@ -1104,9 +1104,6 @@
       function nodeRowHtml(n, isBackup = false) {
         const h = state.health[n.id] || {};
         const editing = state.editingNode === n.id;
-        const backupBadge = isBackup
-          ? `<span class="badge" style="${ISP_CHIP_STYLE}border-style:dashed;opacity:.75;" title="备用节点，仅主成员全部失效时启用">备</span>`
-          : "";
         if (editing) {
           return `
             <tr data-id="${escapeHtml(n.id)}" data-mode="edit">
@@ -1132,8 +1129,9 @@
         return `
           <tr data-id="${escapeHtml(n.id)}" data-mode="view" class="${n.disabled ? "row-disabled" : ""}">
             <td><div class="stack-name">
-              <strong>${escapeHtml(n.name)}</strong>
-              ${backupBadge}
+              ${isBackup
+                ? `<span class="badge" style="${ISP_CHIP_STYLE}border-style:dashed;opacity:.75;" title="备用节点，仅主成员全部失效时启用">备·${escapeHtml(n.name)}</span>`
+                : `<strong>${escapeHtml(n.name)}</strong>`}
             </div></td>
             <td class="mono" title="${escapeHtml(n.public_url)}">${escapeHtml(n.public_url)}</td>
             <td>${ispBadges(n.isp_tags)}</td>
